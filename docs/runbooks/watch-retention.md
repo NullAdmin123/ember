@@ -57,6 +57,33 @@ flowchart TD
 - Policy 同步失败保留已经提交的本地结果，使用既有失败任务与管理员重试；不能声称远端已成功禁用。
 - 本地提交后尚未同步便退出时，已保存的 pending 任务由每分钟 Policy worker 消费；处理中退出时沿用 15 分钟超时回收。新保号变更会替换活跃任务的 ID 并保留批次关系，旧任务完成不能吞掉新变更。即时消费只处理对应用户，不提前消费其他用户任务。
 
+## 线上日志观察
+
+日志随包含本次改动的 API 版本上线生效，无需开启 debug。标准 Compose 部署在部署目录执行：
+
+```bash
+docker compose logs --since=24h -f ember-api 2>&1 \
+  | rg --line-buffered 'WatchRetention|观看保号|PolicyWorker|reason=watch_retention|Emby Policy 同步任务'
+```
+
+API 同时将日志保存到 `api_logs` 卷内的 `api-YYYY-MM-DD.log`。先按 `checkedAt` 核对同一轮保号，再按 `userId`、`taskId` 和 `reason=watch_retention` 追踪权限同步；业务时间字段使用 `CRON_TIMEZONE`。
+
+| 关键词 | 判断口径 |
+| --- | --- |
+| `[WatchRetention] 调度注册成功` | `schedule/timezone/nextRun` 来自已注册的 cron；这里只证明注册成功，到点执行还需看到本轮日志 |
+| `调度未启用 reason=cron_disabled` | 全局 cron 开关关闭；无效表达式另有“调度配置无效，暂停考核”日志 |
+| `开始考核` / `本轮结束` | 同一 `checkedAt` 下核对候选人数、执行结果和耗时；查询候选失败时仍有失败日志及结束汇总 |
+| `考核完成 ... committed=true` | 考核记录与本地状态事务已提交；`invalidated=true` 为该组权益本次失效，`policyChanged=true` 表示访问投影变化并已写入待同步任务，不代表远端已同步 |
+| `[PolicyWorker] 同步任务已结束` | 当前 `taskId` 的终态已持久化，`status=synced/failed` 分别为同步处理完成/失败；管理员或未绑定账号的跳过行为仍以对应 `[Policy] 跳过` 日志为准 |
+| `忽略过期任务结果` | 旧任务已被替换或不再处于 processing；`targetStatus` 只是旧结果，不能作为新任务完成的证据 |
+| `同步终态保存失败` / `本次未领取用户任务` | 分别表示终态落库失败/本次没有领取 pending 任务；后者可能已有其他 worker 处理，需继续按用户查任务终态 |
+
+“本轮结束”的 `status` 为 `completed`（扫描正常结束）、`partial_failure`（扫描结束但存在处理失败）、`failed`（配置或候选读取失败）、`canceled`（上下文取消/超时）或 `interrupted`（异常退出时执行了 defer）。进程被强制终止不保证打印结束汇总，不能把日志缺失当作成功。
+
+汇总字段：`candidates` 为候选人数，`attempted` 为已开始处理人数，`remaining` 为尚未开始人数；`passed/invalidated` 只统计已提交的新考核结果。`skippedInactive/skippedGrace/skippedUnbound/skippedChanged/skippedDuplicate` 分别为不再符合条件、未满本轮周期、未绑定 Emby、统计期间状态变化、重复考核。常规跳过按轮汇总，避免逐用户刷屏。
+
+`failed` 是处理失败数，包含即时同步调用失败，因此可能与 `invalidated` 重叠；`syncRequested` 是已提交的同步意图数，`syncDispatchFailed` 是即时调用失败数。`status=completed` 与 `failed=0` 不能替代每个同步任务的终态：任务可能未被本次调用领取，或等待后续 worker。后续 worker 的成功/失败数量属于该次同步执行摘要，判断具体任务是否结束以 `taskId` 终态日志为准。失败日志保留步骤和错误类型，不打印原始上游响应或凭据。
+
 ## 验证边界
 
 自动化覆盖 Go mock/SQL mock、Web 单元与组件测试、Bot 格式化测试；新增 `TestIntegrationWatchRetentionLifecycle` 供专用 PostgreSQL 环境执行，验证迁移幂等、起算、失效不可复活与重新购买。2026-10-08 已从本机私有 `~/.config/zsh/local.zsh` 加载 `EMBER_INTEGRATION_DATABASE_URL`，在真实专用 PostgreSQL 上通过该用例及六项相关权益/换组/筛选/兑换回归，临时 schema 自动清理。该轮未启动服务，未验证真实播放或浏览器。
@@ -64,3 +91,5 @@ flowchart TD
 2026-10-11 修复回归新增中断后禁用/降组恢复、旧活跃任务替换及批次保留、即时同步成功/失败、失败或取消后的跨轮推进和进度迁移重放；均已在专用 PostgreSQL 隔离 schema 验证。日历 cron 校验、旧配置暂停及权益展示由 Go 单元测试保护。Policy 和播放仍为 fake，不代表真实 Emby 已验证。
 
 同日管理员浏览器复验通过：新建/编辑分组开启保号后空门槛阻止提交，关闭时空值按 `0` 保存，填写 14 天/90 分钟后保存成功；无效 `@every` 被拒绝且没有 Vue 未处理异常。仅操作用户授权的无引用临时分组与无效配置，临时分组已删除，调度草稿已重置；详见[测试运行手册](./testing.md#观看保号管理员浏览器与表单回归)。用户端展示、真实播放考核及远端权限同步仍未实机验收。
+
+同日补充日志回归：SQL mock 验证提交失败不报考核完成、分类汇总不将跳过算作达标、取消时保留剩余数量，以及旧任务/写入失败不报同步终态；真实 cron 注册器验证表达式、全局时区与下一次时间日志，测试不启动调度器或项目服务。日志补充不改变保号规则、对外 API 或 schema。

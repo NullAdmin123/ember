@@ -96,6 +96,9 @@ func (s *Service) ProcessPendingUserPolicySync(ctx context.Context, userID strin
 	if result.Failed > 0 {
 		return errors.New("用户 Emby Policy 同步失败，已保留失败任务")
 	}
+	if result.Claimed == 0 {
+		log.Printf("[PolicyWorker] 本次未领取用户任务 userId=%s reason=no_pending_task", userID)
+	}
 	return nil
 }
 
@@ -151,7 +154,6 @@ func (s *Service) processPendingEmbyPolicySyncTasks(ctx context.Context, limit i
 			if updateErr := s.finishPolicySyncTask(finishCtx, task, SyncStatusFailed, err); updateErr != nil {
 				return result, updateErr
 			}
-			log.Printf("[PolicyWorker] 用户 Emby Policy 同步失败: batchID=%s taskID=%s userID=%s reason=%s err=%v", stringValue(task.BatchID), task.ID, task.UserID, task.Reason, err)
 		} else {
 			result.Succeeded++
 			if updateErr := s.finishPolicySyncTask(ctx, task, SyncStatusSynced, nil); updateErr != nil {
@@ -212,21 +214,31 @@ func (s *Service) claimPendingPolicySyncTasks(ctx context.Context, limit int, us
 	return tasks, err
 }
 
-// finishPolicySyncTask 写入单个 processing 任务的终态和失败原因。
+// finishPolicySyncTask 写入并记录任务终态；写入失败或旧任务已被替换时不记录完成。
 func (s *Service) finishPolicySyncTask(ctx context.Context, task models.EmbyPolicySyncTask, status string, err error) error {
 	var lastError *string
 	if err != nil {
 		msg := truncateError(err)
 		lastError = &msg
 	}
-	return s.db.WithContext(ctx).Model(&models.EmbyPolicySyncTask{}).
+	result := s.db.WithContext(ctx).Model(&models.EmbyPolicySyncTask{}).
 		Where("id = ? AND status = ?", task.ID, SyncStatusProcessing).
 		Updates(map[string]any{
 			"status":        status,
 			"last_error":    lastError,
 			"next_retry_at": nil,
 			"updated_at":    time.Now().UTC(),
-		}).Error
+		})
+	if result.Error != nil {
+		log.Printf("[PolicyWorker] 同步终态保存失败 batchId=%s taskId=%s userId=%s reason=%s targetStatus=%s errorType=%T", stringValue(task.BatchID), task.ID, task.UserID, task.Reason, status, result.Error)
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		log.Printf("[PolicyWorker] 忽略过期任务结果 batchId=%s taskId=%s userId=%s reason=%s targetStatus=%s", stringValue(task.BatchID), task.ID, task.UserID, task.Reason, status)
+		return nil
+	}
+	log.Printf("[PolicyWorker] 同步任务已结束 batchId=%s taskId=%s userId=%s reason=%s status=%s errorType=%T", stringValue(task.BatchID), task.ID, task.UserID, task.Reason, status, err)
+	return nil
 }
 
 // recoverStalePolicySyncTasks 将超时 processing 任务退回 pending，避免进程中断后永久阻塞。

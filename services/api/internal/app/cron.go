@@ -42,6 +42,7 @@ func initCronJobs() func() {
 	}
 	entitlementpkg.RegisterRetentionSchedule(retentionExpression, configpkg.LoadConfiguredTimezone(), cronEnabled)
 	if !cronEnabled {
+		log.Printf("[WatchRetention] 调度未启用 reason=cron_disabled schedule=%q timezone=%s", retentionExpression, configpkg.LoadConfiguredTimezone())
 		return func() {}
 	}
 
@@ -116,17 +117,10 @@ func initCronJobs() func() {
 		return policyService.ProcessPendingUserPolicySync(context.Background(), id)
 	}}
 	if entitlementpkg.RegisteredRetentionSchedule().Enabled {
-		if _, err := c.AddFunc(retentionSchedule, func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			if err := retentionWorker.Run(ctx, time.Now()); err != nil {
-				log.Printf("[WatchRetention] 任务未全部完成: %v", err)
-			}
-		}); err != nil {
-			entitlementpkg.RegisterRetentionSchedule(retentionSchedule, tz, false)
-			log.Printf("观看保号调度注册失败: %v", err)
-		} else {
+		if registerWatchRetentionCron(c, retentionWorker, time.Now()) {
 			taskRegistered = true
+		} else {
+			entitlementpkg.RegisterRetentionSchedule(retentionSchedule, tz, false)
 		}
 	}
 
@@ -388,4 +382,23 @@ func initCronJobs() func() {
 		ctx := c.Stop()
 		<-ctx.Done()
 	}
+}
+
+// registerWatchRetentionCron logs the scheduler's actual entry and next business-time run after successful registration.
+// Registration does not start the scheduler; failed registration must still disable the published schedule in the caller.
+func registerWatchRetentionCron(c *cron.Cron, worker *entitlementpkg.WatchRetentionWorker, now time.Time) bool {
+	id, err := c.AddFunc(worker.Schedule, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		if err := worker.Run(ctx, time.Now()); err != nil {
+			log.Printf("[WatchRetention] 任务未全部完成 errorType=%T", err)
+		}
+	})
+	if err != nil {
+		log.Printf("[WatchRetention] 调度注册失败 schedule=%q timezone=%s errorType=%T", worker.Schedule, worker.Location, err)
+		return false
+	}
+	next := c.Entry(id).Schedule.Next(now.In(worker.Location))
+	log.Printf("[WatchRetention] 调度注册成功 schedule=%q timezone=%s nextRun=%s", worker.Schedule, worker.Location, next.In(worker.Location).Format(time.RFC3339))
+	return true
 }

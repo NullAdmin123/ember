@@ -170,6 +170,7 @@
 - 已完成（2026-10-11 修复）：持久化 Policy 同步恢复、取消后的公平扫描和日历 cron 约束，相关 PostgreSQL 专项及 Go 单元回归通过；剩余真实外部验收边界保持不变。
 - 后端修复整体验证（`00b24a8`）：全量非集成 Go 测试、vet、build、`entitlement/policy/user/config` 四包竞态检测，以及完整 `internal/app` PostgreSQL 集成回归（零跳过）通过；该提交未改 Web/Bot 源码，API 对外字段不变。
 - 已完成（2026-10-11 Web 修复）：分组空门槛不再由数字控件自动补为 `1`，设置中心接住保存失败异常并保留草稿。基于 `00b24a8` 的修复工作区 Web 全量 348 项通过、3 项既有跳过，类型检查与生产构建通过；管理员配置浏览器复验通过，授权临时分组与调度草稿已清理，详见[测试记录](../../runbooks/testing.md#观看保号管理员浏览器与表单回归)。
+- 已完成（2026-10-11 日志补充）：调度注册与下次时间、本轮分类汇总、事务提交后的考核结果、Policy 持久化终态均有日志；回滚、旧任务和未领取任务不报成功，SQL mock 与 cron 注册测试覆盖这些边界。基于 `48dd5244` 的工作区通过 Go 全量非集成测试、vet、build 及 `entitlement/policy` 竞态测试；线上日志尚未实测，观察方式见[运行手册](../../runbooks/watch-retention.md#线上日志观察)。
 - 已同步：系统架构、模型/API/配置/Web 参考、数据库入口、[观看保号运行手册](../../runbooks/watch-retention.md)和测试入口。
 - 本地验证（2026-10-08）：`go test ./... -skip Integration -count=1`、`go vet ./...`、`go build ./...` 通过；权益/支付/用户/过期任务/Emby 适配关键包 race 通过。Web 41 个文件通过、1 个既有跳过，342 项通过、3 项既有跳过，类型检查与生产构建通过。Bot 83 项通过、24 个子测试通过，`main.py` 编译检查通过。文档相对链接与 diff 检查通过。
 - 验证边界：上述 Go/SQL mock、HTTP fixture、Web 和 Bot 测试不代表实际 PostgreSQL 或插件行为；随后从本机私有配置加载专用连接，`TestIntegrationWatchRetentionLifecycle` 及六项相关 PostgreSQL 集成回归已通过，临时 schema 自动清理。本轮未启动服务、未访问真实外部系统。

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/konghang/ember/backend/internal/models"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,8 +41,9 @@ func TestRetentionQueryFailureNeverInvalidates(t *testing.T) {
 
 // TestRetentionInvalidationAndRollback exercises final revalidation, audit and fallback as one transaction.
 func TestRetentionInvalidationAndRollback(t *testing.T) {
-	for _, failure := range []string{"", "invalidation", "enqueue"} {
+	for _, failure := range []string{"", "invalidation", "enqueue", "commit"} {
 		t.Run("fallback_"+failure, func(t *testing.T) {
+			output := captureRetentionLogs(t)
 			db, mock := mockDatabase(t)
 			start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 			at := start.AddDate(0, 0, 31)
@@ -65,13 +67,20 @@ func TestRetentionInvalidationAndRollback(t *testing.T) {
 					mock.ExpectRollback()
 				} else {
 					queue.WillReturnResult(sqlmock.NewResult(0, 1))
-					mock.ExpectCommit()
+					commit := mock.ExpectCommit()
+					if failure == "commit" {
+						commit.WillReturnError(errors.New("fixture commit failed"))
+					}
 				}
 			}
 			worker := WatchRetentionWorker{DB: db, Location: time.UTC}
-			changed, err := worker.apply(context.Background(), old, start, at, 0)
-			if (err != nil) != (failure != "") || (failure == "" && !changed) {
-				t.Fatalf("changed=%t err=%v", changed, err)
+			result, err := worker.apply(context.Background(), old, start, at, 0)
+			if (err != nil) != (failure != "") || (failure == "" && !result.changed) {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			completed := strings.Contains(output.String(), "考核完成")
+			if completed != (failure == "") {
+				t.Fatalf("completion log must require a successful commit: %s", output.String())
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)
@@ -87,10 +96,10 @@ func TestRetentionPolicyDisabledDuringQueryDiscardsResult(t *testing.T) {
 	mock.ExpectBegin()
 	expectRetentionSnapshot(mock, at, false)
 	mock.ExpectCommit()
-	worker := WatchRetentionWorker{DB: db}
-	changed, err := worker.apply(context.Background(), &retentionSnapshot{User: models.User{ID: "u1"}}, at, at, 0)
-	if err != nil || changed {
-		t.Fatalf("changed=%t err=%v", changed, err)
+	worker := WatchRetentionWorker{DB: db, Location: time.UTC}
+	result, err := worker.apply(context.Background(), &retentionSnapshot{User: models.User{ID: "u1"}}, at, at, 0)
+	if err != nil || result.changed {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

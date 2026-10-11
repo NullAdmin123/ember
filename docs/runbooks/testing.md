@@ -237,3 +237,13 @@ Web 使用 `npm run test` 覆盖 `watch-retention`、分组表单、概览和持
 - 临时分组已删除，列表恢复原有两组；没有修改既有分组或用户权益。MCP 浏览器已关闭，本轮 17 个快照/日志已清理，原有产物保留。
 
 本轮浏览器范围为管理员配置，用户端观看要求、真实播放考核与 Emby 权限同步尚未实机验收；相关自动化仍使用 mock/fake。
+
+### 观看保号日志回归
+
+2026-10-11，基于 `48dd5244` 的日志补充工作区以 SQL mock 和现有 fake 验证：
+
+- `TestWatchRetentionCronRegistrationLogs` 使用真实 cron 注册器核对注册成功/失败、业务时区及下次执行时间，并验证回调会记录 worker 失败；不启动调度器或项目服务。
+- `TestRetentionRunSummary` 覆盖空候选、候选读取失败、未满周期、不再符合条件、达标、失效、状态变化、重复考核、统计失败、中断及即时同步失败的计数和结果。扩展 `TestRetentionInvalidationAndRollback`，确认数据库提交失败时不打印“考核完成”。
+- `TestPolicyTaskTerminalLogRequiresPersistedResult` 覆盖 synced/failed 终态、旧任务被替换、更新及提交失败；`TestImmediatePolicySyncWithoutClaimDoesNotLogSuccess` 确认未领取任务不报同步成功。终态日志不输出原始上游错误内容。
+
+Go 全量非集成测试、`go vet ./...`、`go build ./...` 及 `entitlement/policy` 两包竞态测试通过。本次不改 API 合同、数据库 schema 或 Web；未触发真实外部链路，既有专用 PostgreSQL 与浏览器证据不扩展为本轮线上日志已实测。线上观察入口与字段含义见[观看保号运行手册](./watch-retention.md#线上日志观察)。

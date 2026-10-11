@@ -30,6 +30,19 @@ type retentionSnapshot struct {
 	Start   time.Time
 }
 
+// retentionApplyResult describes only committed work; skipped decisions never count as passed checks.
+type retentionApplyResult struct {
+	check      *models.WatchRetentionCheck
+	changed    bool
+	skipReason string
+}
+
+type retentionRunStats struct {
+	candidates, attempted, passed, invalidated, failed            int
+	skippedInactive, skippedGrace, skippedUnbound, skippedChanged int
+	skippedDuplicate, syncRequested, syncDispatchFailed           int
+}
+
 // RetentionStart applies a group policy reset without reviving invalidated grants.
 func RetentionStart(holding models.UserEntitlement, group models.PlanGroup) *time.Time {
 	if holding.WatchRetentionInvalidatedAt != nil {
@@ -42,10 +55,28 @@ func RetentionStart(holding models.UserEntitlement, group models.PlanGroup) *tim
 	return start
 }
 
-// Run examines currently applied ordinary-user groups, prioritizing users not attempted recently.
-// Durable attempt progress lets a later process continue after cancellation or upstream failure.
-func (w *WatchRetentionWorker) Run(ctx context.Context, at time.Time) error {
+// Run examines current groups and reports committed outcomes and skips for this checkedAt.
+// Its deferred summary also covers early failure/cancellation; abrupt process termination may leave only a start log.
+func (w *WatchRetentionWorker) Run(ctx context.Context, at time.Time) (runErr error) {
+	started := time.Now()
+	checkedAt := at.Format(time.RFC3339Nano)
+	if w.Location != nil {
+		checkedAt = at.In(w.Location).Format(time.RFC3339Nano)
+	}
+	stats := retentionRunStats{}
+	status := "interrupted"
+	defer func() {
+		if ctx.Err() != nil {
+			status = "canceled"
+		}
+		log.Printf("[WatchRetention] 本轮结束 checkedAt=%s status=%s candidates=%d attempted=%d remaining=%d passed=%d invalidated=%d skippedInactive=%d skippedGrace=%d skippedUnbound=%d skippedChanged=%d skippedDuplicate=%d failed=%d syncRequested=%d syncDispatchFailed=%d duration=%s errorType=%T",
+			checkedAt, status, stats.candidates, stats.attempted, stats.candidates-stats.attempted,
+			stats.passed, stats.invalidated, stats.skippedInactive, stats.skippedGrace, stats.skippedUnbound,
+			stats.skippedChanged, stats.skippedDuplicate, stats.failed, stats.syncRequested, stats.syncDispatchFailed, time.Since(started), runErr)
+	}()
 	if w.DB == nil || w.Query == nil || w.Location == nil {
+		status = "failed"
+		log.Printf("[WatchRetention] 任务配置不完整 checkedAt=%s", checkedAt)
 		return errors.New("保号任务未配置")
 	}
 	var users []models.User
@@ -54,26 +85,30 @@ func (w *WatchRetentionWorker) Run(ctx context.Context, at time.Time) error {
 		Joins("LEFT JOIN watch_retention_scan_states scan ON scan.user_id = users.id").
 		Where("users.role = 'user' AND users.resource_access_granted = true AND g.watch_retention_enabled = true").
 		Order("scan.last_attempt_at ASC NULLS FIRST, users.id").Find(&users).Error; err != nil {
+		status = "failed"
+		log.Printf("[WatchRetention] 候选用户读取失败 checkedAt=%s errorType=%T", checkedAt, err)
 		return err
 	}
-	log.Printf("[WatchRetention] 开始考核 candidates=%d checkedAt=%s", len(users), at.In(w.Location).Format(time.RFC3339))
-	failures := 0
+	stats.candidates = len(users)
+	log.Printf("[WatchRetention] 开始考核 candidates=%d checkedAt=%s", len(users), checkedAt)
 	for _, user := range users {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		stats.attempted++
 		if err := w.recordAttempt(ctx, user.ID, at); err != nil {
-			failures++
-			log.Printf("[WatchRetention] 扫描进度保存失败，跳过考核 userId=%s errorType=%T", user.ID, err)
+			stats.failed++
+			log.Printf("[WatchRetention] 扫描进度保存失败，跳过考核 checkedAt=%s userId=%s errorType=%T", checkedAt, user.ID, err)
 			continue
 		}
 		snapshot, err := w.snapshot(ctx, user.ID, false)
 		if err != nil {
-			failures++
-			log.Printf("[WatchRetention] 读取失败 userId=%s errorType=%T", user.ID, err)
+			stats.failed++
+			log.Printf("[WatchRetention] 读取失败 checkedAt=%s userId=%s errorType=%T", checkedAt, user.ID, err)
 			continue
 		}
 		if snapshot == nil {
+			stats.skippedInactive++
 			continue
 		}
 		schedule := w.Schedule
@@ -82,40 +117,58 @@ func (w *WatchRetentionWorker) Run(ctx context.Context, at time.Time) error {
 		}
 		first, err := FirstWatchRetentionCheck(snapshot.Start, snapshot.Group.WatchRetentionDays, schedule, w.Location)
 		if err != nil {
-			failures++
-			log.Printf("[WatchRetention] 调度规则无效 userId=%s", user.ID)
+			stats.failed++
+			log.Printf("[WatchRetention] 调度规则无效 checkedAt=%s userId=%s", checkedAt, user.ID)
 			continue
 		}
 		if at.Before(first) {
+			stats.skippedGrace++
 			continue
 		}
 		if snapshot.User.EmbyID == "" {
-			log.Printf("[WatchRetention] 跳过未绑定用户 userId=%s", user.ID)
+			stats.skippedUnbound++
+			log.Printf("[WatchRetention] 跳过未绑定用户 checkedAt=%s userId=%s", checkedAt, user.ID)
 			continue
 		}
 		start := at.In(w.Location).AddDate(0, 0, -snapshot.Group.WatchRetentionDays)
 		seconds, err := w.Query(ctx, snapshot.User.EmbyID, start, at, w.Location)
 		if err != nil || seconds < 0 {
-			failures++
-			log.Printf("[WatchRetention] 统计失败，保留权益 userId=%s group=%s errorType=%T", user.ID, snapshot.Group.Key, err)
+			stats.failed++
+			log.Printf("[WatchRetention] 统计失败，保留权益 checkedAt=%s userId=%s group=%s errorType=%T", checkedAt, user.ID, snapshot.Group.Key, err)
 			continue
 		}
-		changed, err := w.apply(ctx, snapshot, start, at, seconds)
+		result, err := w.apply(ctx, snapshot, start, at, seconds)
 		if err != nil {
-			failures++
-			log.Printf("[WatchRetention] 考核保存失败 userId=%s errorType=%T", user.ID, err)
+			stats.failed++
+			log.Printf("[WatchRetention] 考核保存失败 checkedAt=%s userId=%s errorType=%T", checkedAt, user.ID, err)
 			continue
 		}
-		if changed && w.Sync != nil {
+		switch {
+		case result.skipReason == "state_changed":
+			stats.skippedChanged++
+		case result.skipReason == "duplicate":
+			stats.skippedDuplicate++
+		case result.check != nil && result.check.Invalidated:
+			stats.invalidated++
+		case result.check != nil:
+			stats.passed++
+		}
+		if result.changed {
+			stats.syncRequested++
+		}
+		if result.changed && w.Sync != nil {
 			if err := w.Sync(user.ID); err != nil {
-				failures++
-				log.Printf("[WatchRetention] 权限同步失败 userId=%s", user.ID)
+				stats.failed++
+				stats.syncDispatchFailed++
+				log.Printf("[WatchRetention] 权限同步失败 checkedAt=%s userId=%s errorType=%T", checkedAt, user.ID, err)
 			}
 		}
 	}
-	if failures > 0 {
-		return fmt.Errorf("观看保号存在 %d 个处理失败", failures)
+	if stats.failed > 0 {
+		status = "partial_failure"
+		return fmt.Errorf("观看保号存在 %d 个处理失败", stats.failed)
 	}
+	status = "completed"
 	return nil
 }
 
@@ -168,9 +221,10 @@ func sameRetentionSnapshot(a, b *retentionSnapshot) bool {
 	return a != nil && b != nil && a.User.EmbyID == b.User.EmbyID && a.Group.Key == b.Group.Key && a.Group.WatchRetentionDays == b.Group.WatchRetentionDays && a.Group.WatchRetentionMinMinutes == b.Group.WatchRetentionMinMinutes && sameTime(a.Group.WatchRetentionResetAt, b.Group.WatchRetentionResetAt) && a.Start.Equal(b.Start) && sameTime(a.Holding.ExpiresAt, b.Holding.ExpiresAt) && a.Holding.ValidityType == b.Holding.ValidityType
 }
 
-// apply atomically records the check and invalidates only its still-current grant; errors roll everything back.
-func (w *WatchRetentionWorker) apply(ctx context.Context, old *retentionSnapshot, start, at time.Time, seconds int64) (bool, error) {
-	changed := false
+// apply atomically records a still-current decision, logging completion only after its transaction commits.
+// Commit errors return no successful outcome; stale/duplicate results remain distinguishable in run summaries.
+func (w *WatchRetentionWorker) apply(ctx context.Context, old *retentionSnapshot, start, at time.Time, seconds int64) (retentionApplyResult, error) {
+	result := retentionApplyResult{}
 	err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		locked := *w
 		locked.DB = tx
@@ -179,15 +233,17 @@ func (w *WatchRetentionWorker) apply(ctx context.Context, old *retentionSnapshot
 			return err
 		}
 		if !sameRetentionSnapshot(old, fresh) {
-			log.Printf("[WatchRetention] 状态已变，丢弃旧统计 userId=%s", old.User.ID)
+			result.skipReason = "state_changed"
+			log.Printf("[WatchRetention] 状态已变，丢弃旧统计 checkedAt=%s userId=%s", at.In(w.Location).Format(time.RFC3339Nano), old.User.ID)
 			return nil
 		}
 		record := models.WatchRetentionCheck{UserID: fresh.User.ID, PlanGroup: fresh.Group.Key, CheckedAt: at, WindowStart: start, StartedAt: fresh.Start, PeriodDays: fresh.Group.WatchRetentionDays, MinMinutes: fresh.Group.WatchRetentionMinMinutes, WatchedSeconds: seconds, Invalidated: seconds < int64(fresh.Group.WatchRetentionMinMinutes)*60}
-		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
-		if result.Error != nil {
-			return result.Error
+		write := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&record)
+		if write.Error != nil {
+			return write.Error
 		}
-		if result.RowsAffected == 0 {
+		if write.RowsAffected == 0 {
+			result.skipReason = "duplicate"
 			return nil
 		}
 		if record.Invalidated {
@@ -198,18 +254,25 @@ func (w *WatchRetentionWorker) apply(ctx context.Context, old *retentionSnapshot
 			if err != nil {
 				return err
 			}
-			changed, err = ReconcileLocked(tx, &fresh.User, ranks, at)
+			result.changed, err = ReconcileLocked(tx, &fresh.User, ranks, at)
 			if err != nil {
 				return err
 			}
-			if changed {
+			if result.changed {
 				if err := policypkg.EnqueueUserPolicySyncTx(tx, &fresh.User, "watch_retention"); err != nil {
 					return err
 				}
 			}
 		}
-		log.Printf("[WatchRetention] 考核完成 userId=%s group=%s start=%s end=%s seconds=%d minMinutes=%d invalidated=%t", record.UserID, record.PlanGroup, start.Format(time.RFC3339), at.Format(time.RFC3339), seconds, record.MinMinutes, record.Invalidated)
+		result.check = &record
 		return nil
 	})
-	return changed, err
+	if err != nil {
+		return retentionApplyResult{}, err
+	}
+	if record := result.check; record != nil {
+		log.Printf("[WatchRetention] 考核完成 checkedAt=%s userId=%s group=%s start=%s end=%s seconds=%d minMinutes=%d invalidated=%t committed=true policyChanged=%t",
+			at.In(w.Location).Format(time.RFC3339Nano), record.UserID, record.PlanGroup, start.In(w.Location).Format(time.RFC3339), at.In(w.Location).Format(time.RFC3339), seconds, record.MinMinutes, record.Invalidated, result.changed)
+	}
+	return result, nil
 }
