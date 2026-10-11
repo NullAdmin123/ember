@@ -220,8 +220,20 @@ make test-bot-report
 
 2026-10-11 增加恢复与公平扫描专项：在同一专用数据库配置下执行 `go test ./internal/app -run '^TestIntegrationWatchRetention' -count=1 -v`。覆盖提交后中断的禁用/降组恢复、已有活跃任务替换及批次保留、即时同步成功/失败、成功或失败前缀后的跨轮推进、进度迁移重放。配置、首次日期和运行期注册统一拒绝 `@every`；旧配置暂停后权益展示仍可读取，由 `config`、`entitlement` 和 `user` 包单测覆盖。
 
-基于 `8be5635` 的本轮未提交修复已通过全量非集成 Go 测试、`go vet ./...`、`go build ./...`，以及 `entitlement/policy/user/config` 四包竞态检测；完整 `internal/app` PostgreSQL 集成回归通过，零跳过。外部依赖均为 mock/fake，临时 schema 自动清理；未启动服务，未验证真实 Emby 或浏览器。
+后端修复已提交为 `00b24a8`，通过全量非集成 Go 测试、`go vet ./...`、`go build ./...`，以及 `entitlement/policy/user/config` 四包竞态检测；完整 `internal/app` PostgreSQL 集成回归通过，零跳过。外部依赖均为 mock/fake，临时 schema 自动清理；该轮未启动服务，未验证真实 Emby 或浏览器。
 
 Web 使用 `npm run test` 覆盖 `watch-retention`、分组表单、概览和持有权益；Bot 格式化回归验证失效永久权益不再显示为永久。测试不请求真实 Emby 或 Telegram，不启动项目服务。
 
 2026-10-08 补充 PostgreSQL 实测：从本机私有 `~/.config/zsh/local.zsh` 显式注入专用连接后，`TestIntegrationWatchRetentionLifecycle` 通过；另外 `TestIntegrationEntitlementMigrationAndFallback`、`TestIntegrationRedemptionPermanentValidity`、`TestIntegrationRedemptionValidityUpgrade`、`TestIntegrationAdminTransferGroup`、`TestIntegrationAdminTransferGroupRejectsConflict`、`TestIntegrationUserEntitlementFilter` 六项通过。均在独立 `itest_*` schema 中运行并自动清理，外部播放与权限同步为 fake；此次结果不扩展为真实 Emby 或浏览器验收。
+
+### 观看保号管理员浏览器与表单回归
+
+2026-10-11，基于 `00b24a8` 的 Web 表单与设置页修复工作区完成以下验证，无 API 合同或数据库 schema 变更：
+
+- 真实 Element Plus 数字控件回归覆盖新建/编辑开启后保持空门槛、填写后保存、关闭时空值提交为 `0`、切换开关保留已有正数。设置页组件测试覆盖保存失败后保留草稿、恢复按钮、不重复提示或冒泡 Vue 异常，以及修正后重试成功。
+- `npm run test -- --maxWorkers=2`：41 个文件通过、1 个既有集成文件跳过，348 项通过、3 项既有跳过；`npm run build` 类型检查与生产构建通过。
+- Playwright MCP 在用户已启动的本机服务验证：新建及编辑原门槛为 `0` 的临时分组，开启后输入框保持空白，提交被拦截且无保存请求；关闭后创建请求以 `watchRetentionMinMinutes: 0` 返回 `200`；编辑为开启、14 天/90 分钟后保存返回 `200`。
+- 设置中心提交 `@every 24h` 返回预期 `400`，正确展示拒绝原因，草稿保留、保存按钮恢复可用。控制台仅有该 HTTP `400` 记录，没有 Vue 警告或未捕获异常；随后重置回原 `0 2 * * *`，保存按钮禁用，没有修改有效调度配置。
+- 临时分组已删除，列表恢复原有两组；没有修改既有分组或用户权益。MCP 浏览器已关闭，本轮 17 个快照/日志已清理，原有产物保留。
+
+本轮浏览器范围为管理员配置，用户端观看要求、真实播放考核与 Emby 权限同步尚未实机验收；相关自动化仍使用 mock/fake。

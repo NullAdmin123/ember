@@ -3,6 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import type { VueWrapper } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ElTooltip from 'element-plus/es/components/tooltip/index'
+import ElInputNumber from 'element-plus/es/components/input-number/index'
+import ElInput from 'element-plus/es/components/input/index'
 
 import PlanGroupsView from './PlanGroupsView.vue'
 import type { EmbyPolicySyncBatchDetail, ManagedPlanGroup } from '@/types/api'
@@ -149,7 +151,7 @@ type PlanGroupsSetupState = {
     subscriptionAutoApproveDailyLimit: number
     watchRetentionEnabled: boolean
     watchRetentionDays: number
-    watchRetentionMinMinutes: number
+    watchRetentionMinMinutes: number | null | undefined
     p115PlaybackMode: 'personal' | 'system'
     p115TransferHourlyLimit: number
     p115TransferDailyLimit: number
@@ -163,7 +165,7 @@ type PlanGroupsSetupState = {
     subscriptionAutoApproveDailyLimit: number
     watchRetentionEnabled: boolean
     watchRetentionDays: number
-    watchRetentionMinMinutes: number
+    watchRetentionMinMinutes: number | null | undefined
     p115PlaybackMode: 'personal' | 'system'
     p115TransferHourlyLimit: number
     p115TransferDailyLimit: number
@@ -187,8 +189,8 @@ function setupStateOf(wrapper: VueWrapper): PlanGroupsSetupState {
   return (wrapper.vm.$ as unknown as { setupState: PlanGroupsSetupState }).setupState
 }
 
-/** 指定操作行时渲染真实 Tooltip，覆盖表格操作插槽的条件渲染。 */
-function mountView(actionRows?: ManagedPlanGroup[]) {
+/** 保留真实数字控件时，同时验证其挂载限值处理不会替用户填写保号门槛。 */
+function mountView(actionRows?: ManagedPlanGroup[], realNumericInputs = false) {
   const actionColumnStub = defineComponent({
     props: ['label'],
     setup(props, { slots }) {
@@ -214,8 +216,8 @@ function mountView(actionRows?: ManagedPlanGroup[]) {
         'el-form': passthroughStub,
         'el-form-item': passthroughStub,
         'el-icon': passthroughStub,
-        'el-input': passthroughStub,
-        'el-input-number': passthroughStub,
+        'el-input': realNumericInputs ? ElInput : passthroughStub,
+        'el-input-number': realNumericInputs ? ElInputNumber : passthroughStub,
         'el-option': passthroughStub,
         'el-select': passthroughStub,
         'el-progress': progressStub,
@@ -245,6 +247,78 @@ describe('PlanGroupsView', () => {
     vi.mocked(updatePlanGroupEmbyPolicyTemplate).mockResolvedValue({
       data: { batchId: 'batch_empty', affectedUserCount: 0, status: 'synced' },
     })
+  })
+
+  it.each(['create', 'edit'] as const)('%s 表单开启保号后保持空门槛，明确填写后才能保存', async (mode) => {
+    const wrapper = mountView(undefined, true)
+    try {
+      await flushPromises()
+      const state = setupStateOf(wrapper)
+      if (mode === 'create') {
+        state.createForm.key = 'RETENTION_TEST'
+        state.createForm.name = '保号测试'
+      } else {
+        state.openEditDialog({ key: 'RETENTION_TEST', name: '保号测试', isDefault: false, sortOrder: 0, watchRetentionMinMinutes: 0, p115PlaybackMode: 'personal', p115TransferHourlyLimit: 5, p115TransferDailyLimit: 10 })
+      }
+      const form = mode === 'create' ? state.createForm : state.editForm
+      form.watchRetentionEnabled = true
+      await flushPromises()
+
+      const minutes = wrapper.find<HTMLInputElement>('[label="最低观看分钟数"] input')
+      expect(minutes.element.value).toBe('')
+      const save = mode === 'create' ? state.handleCreate : state.handleUpdate
+      await save()
+      expect(createPlanGroup).not.toHaveBeenCalled()
+      expect(updatePlanGroup).not.toHaveBeenCalled()
+      expect(ElMessage.warning).toHaveBeenCalledWith('开启观看保号时，请填写 1 至 5256000 的最低观看分钟数')
+
+      await minutes.setValue('90')
+      await minutes.trigger('change')
+      await flushPromises()
+      await save()
+      if (mode === 'create') {
+        expect(createPlanGroup).toHaveBeenCalledWith(expect.objectContaining({ watchRetentionEnabled: true, watchRetentionMinMinutes: 90 }))
+        expect(state.createForm.watchRetentionMinMinutes).toBeUndefined()
+      } else {
+        expect(updatePlanGroup).toHaveBeenCalledWith('RETENTION_TEST', expect.objectContaining({ watchRetentionEnabled: true, watchRetentionMinMinutes: 90 }))
+      }
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('未启用保号时空门槛按接口约定提交为零', async () => {
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      const state = setupStateOf(wrapper)
+      state.createForm.key = 'RETENTION_OFF'
+      state.createForm.name = '关闭保号'
+      state.createForm.watchRetentionMinMinutes = undefined
+      await state.handleCreate()
+      expect(createPlanGroup).toHaveBeenCalledWith(expect.objectContaining({ watchRetentionEnabled: false, watchRetentionMinMinutes: 0 }))
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('编辑已有正数门槛时切换开关仍保留原配置', async () => {
+    const wrapper = mountView(undefined, true)
+    try {
+      await flushPromises()
+      const state = setupStateOf(wrapper)
+      state.openEditDialog({ key: 'RETENTION_SET', name: '已配置', isDefault: false, sortOrder: 0, watchRetentionEnabled: true, watchRetentionMinMinutes: 90, p115PlaybackMode: 'personal', p115TransferHourlyLimit: 5, p115TransferDailyLimit: 10 })
+      await flushPromises()
+      state.editForm.watchRetentionEnabled = false
+      await nextTick()
+      state.editForm.watchRetentionEnabled = true
+      await flushPromises()
+      expect(wrapper.find<HTMLInputElement>('[label="最低观看分钟数"] input').element.value).toBe('90')
+      await state.handleUpdate()
+      expect(updatePlanGroup).toHaveBeenCalledWith('RETENTION_SET', expect.objectContaining({ watchRetentionEnabled: true, watchRetentionMinMinutes: 90 }))
+    } finally {
+      wrapper.unmount()
+    }
   })
 
   it('失败同步批次展示失败用户摘要并允许重试失败项', async () => {

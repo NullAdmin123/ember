@@ -81,7 +81,7 @@ const createForm = ref({
   subscriptionAutoApproveDailyLimit: 0,
   watchRetentionEnabled: false,
   watchRetentionDays: 30,
-  watchRetentionMinMinutes: 0,
+  watchRetentionMinMinutes: undefined as number | null | undefined,
   p115PlaybackMode: 'personal' as 'personal' | 'system',
   p115TransferHourlyLimit: 5,
   p115TransferDailyLimit: 10
@@ -96,7 +96,7 @@ const editForm = ref({
   subscriptionAutoApproveDailyLimit: 0,
   watchRetentionEnabled: false,
   watchRetentionDays: 30,
-  watchRetentionMinMinutes: 0,
+  watchRetentionMinMinutes: undefined as number | null | undefined,
   p115PlaybackMode: 'personal' as 'personal' | 'system',
   p115TransferHourlyLimit: 5,
   p115TransferDailyLimit: 10
@@ -306,6 +306,7 @@ const fetchData = async () => {
   }
 }
 
+/** 新建成功后清空门槛，下一次启用保号仍须由管理员明确填写。 */
 const resetCreateForm = () => {
   createForm.value = {
     key: '',
@@ -314,15 +315,16 @@ const resetCreateForm = () => {
     isDefault: false,
     sortOrder: 0,
     subscriptionAutoApproveDailyLimit: 0,
-  watchRetentionEnabled: false,
-  watchRetentionDays: 30,
-  watchRetentionMinMinutes: 0,
+    watchRetentionEnabled: false,
+    watchRetentionDays: 30,
+    watchRetentionMinMinutes: undefined,
     p115PlaybackMode: 'personal',
     p115TransferHourlyLimit: 5,
     p115TransferDailyLimit: 10
   }
 }
 
+/** 回填分组配置；零门槛表示未填写，已有正数门槛保持不变。 */
 const openEditDialog = (group: ManagedPlanGroup) => {
   editForm.value = {
     key: group.key,
@@ -333,7 +335,7 @@ const openEditDialog = (group: ManagedPlanGroup) => {
     subscriptionAutoApproveDailyLimit: group.subscriptionAutoApproveDailyLimit ?? 0,
     watchRetentionEnabled: group.watchRetentionEnabled ?? false,
     watchRetentionDays: group.watchRetentionDays ?? 30,
-    watchRetentionMinMinutes: group.watchRetentionMinMinutes ?? 0,
+    watchRetentionMinMinutes: (group.watchRetentionMinMinutes ?? 0) > 0 ? group.watchRetentionMinMinutes : undefined,
     p115PlaybackMode: group.p115PlaybackMode ?? 'personal',
     p115TransferHourlyLimit: group.p115TransferHourlyLimit ?? 5,
     p115TransferDailyLimit: group.p115TransferDailyLimit ?? 10
@@ -395,6 +397,7 @@ const openPolicyDialog = async (group: ManagedPlanGroup) => {
   }
 }
 
+/** 校验显式填写的保号门槛再创建分组；关闭时空值按接口约定提交为零。 */
 const handleCreate = async () => {
   const retentionError = validateWatchRetention(createForm.value)
   if (retentionError) { ElMessage.warning(retentionError); return }
@@ -420,7 +423,7 @@ const handleCreate = async () => {
     subscriptionAutoApproveDailyLimit: createForm.value.subscriptionAutoApproveDailyLimit,
     watchRetentionEnabled: createForm.value.watchRetentionEnabled,
     watchRetentionDays: createForm.value.watchRetentionDays,
-    watchRetentionMinMinutes: createForm.value.watchRetentionMinMinutes,
+    watchRetentionMinMinutes: createForm.value.watchRetentionMinMinutes ?? 0,
     p115PlaybackMode: createForm.value.p115PlaybackMode,
     p115TransferHourlyLimit: createForm.value.p115TransferHourlyLimit,
     p115TransferDailyLimit: createForm.value.p115TransferDailyLimit
@@ -438,6 +441,7 @@ const handleCreate = async () => {
   }
 }
 
+/** 保存经过校验的分组配置，避免数字控件或空值转换替管理员指定有效门槛。 */
 const handleUpdate = async () => {
   const retentionError = validateWatchRetention(editForm.value)
   if (retentionError) { ElMessage.warning(retentionError); return }
@@ -462,7 +466,7 @@ const handleUpdate = async () => {
     subscriptionAutoApproveDailyLimit: editForm.value.subscriptionAutoApproveDailyLimit,
     watchRetentionEnabled: editForm.value.watchRetentionEnabled,
     watchRetentionDays: editForm.value.watchRetentionDays,
-    watchRetentionMinMinutes: editForm.value.watchRetentionMinMinutes,
+    watchRetentionMinMinutes: editForm.value.watchRetentionMinMinutes ?? 0,
     p115PlaybackMode: editForm.value.p115PlaybackMode,
     p115TransferHourlyLimit: editForm.value.p115TransferHourlyLimit,
     p115TransferDailyLimit: editForm.value.p115TransferDailyLimit

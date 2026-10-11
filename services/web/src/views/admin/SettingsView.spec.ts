@@ -25,6 +25,7 @@ vi.mock('@/api/admin', () => ({
 
 vi.mock('element-plus', () => ({
   ElMessage: {
+    error: vi.fn(),
     info: vi.fn(),
     success: vi.fn(),
     warning: vi.fn(),
@@ -139,9 +140,11 @@ function createConfigItem(overrides: Partial<AdminConfigItem> = {}): AdminConfig
   }
 }
 
-function mountView() {
+/** 挂载设置页并允许用错误处理器观察事件回调是否泄漏请求异常。 */
+function mountView(errorHandler?: (error: unknown) => void) {
   return mount(SettingsView, {
     global: {
+      config: { errorHandler },
       directives: {
         loading: {
           mounted() {},
@@ -174,6 +177,8 @@ describe('SettingsView', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(getConfigs).mockReset()
+    vi.mocked(updateConfig).mockReset()
     vi.mocked(getExternalApiKeyStatus).mockResolvedValue({ data: { configured: false } } as never)
     vi.mocked(runCronJob).mockResolvedValue({ message: '任务执行成功' } as never)
   })
@@ -215,6 +220,66 @@ describe('SettingsView', () => {
     expect(getConfigs).toHaveBeenCalledTimes(2)
     expect(ElMessage.success).toHaveBeenCalledWith('基础业务保存成功')
     expect((wrapper.find('input[placeholder="https://t.me/ember"]').element as HTMLInputElement).value).toBe('https://t.me/updated')
+  })
+
+  it('保存调度被拒绝后保留草稿并解除保存态，修正后可重试且不向 Vue 冒泡错误', async () => {
+    const config = createConfigItem({
+      key: 'WATCH_RETENTION_SCHEDULE',
+      group: 'schedule',
+      groupLabel: '定时任务',
+      label: '观看保号检查时间',
+      type: 'string',
+      placeholder: '0 2 * * *',
+      value: '0 2 * * *',
+      allowEmpty: false,
+      emptyValueMode: 'not_allowed',
+    })
+    vi.mocked(getConfigs)
+      .mockResolvedValueOnce({ data: [config] })
+      .mockResolvedValueOnce({ data: [{ ...config, value: '0 3 * * *' }] })
+    let rejectSave!: (reason: Error) => void
+    vi.mocked(updateConfig)
+      .mockImplementationOnce(() => new Promise<AdminConfigItem>((_resolve, reject) => {
+        rejectSave = reject
+      }))
+      .mockResolvedValueOnce({ ...config, value: '0 3 * * *' })
+    const errorHandler = vi.fn()
+    const wrapper = mountView(errorHandler)
+    await flushPromises()
+
+    const input = wrapper.get('input[placeholder="0 2 * * *"]')
+    await input.setValue('@every 24h')
+    const saveButton = findButton(wrapper, '保存本组配置')
+    await saveButton.trigger('click')
+    expect(saveButton.element).toHaveProperty('disabled', true)
+    expect(saveButton.text()).toBe('保存中...')
+
+    rejectSave(Object.assign(new Error('观看保号检查时间不支持 @every'), {
+      response: { status: 400 },
+    }))
+    await flushPromises()
+
+    expect(updateConfig).toHaveBeenNthCalledWith(1, 'WATCH_RETENTION_SCHEDULE', { value: '@every 24h' })
+    expect(errorHandler).not.toHaveBeenCalled()
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(ElMessage.error).not.toHaveBeenCalled()
+    expect(getConfigs).toHaveBeenCalledTimes(1)
+    expect(input.element).toHaveProperty('value', '@every 24h')
+    expect(saveButton.element).toHaveProperty('disabled', false)
+    expect(saveButton.text()).toBe('保存本组配置')
+
+    await input.setValue('0 3 * * *')
+    await saveButton.trigger('click')
+    await flushPromises()
+
+    expect(updateConfig).toHaveBeenNthCalledWith(2, 'WATCH_RETENTION_SCHEDULE', { value: '0 3 * * *' })
+    expect(ElMessage.success).toHaveBeenCalledOnce()
+    expect(ElMessage.success).toHaveBeenCalledWith('定时任务保存成功')
+    expect(errorHandler).not.toHaveBeenCalled()
+    expect(getConfigs).toHaveBeenCalledTimes(2)
+    expect(input.element).toHaveProperty('value', '0 3 * * *')
+    expect(saveButton.element).toHaveProperty('disabled', true)
+    wrapper.unmount()
   })
 
   it('多选配置保存选项值，勾选与取消不触发弃用警告', async () => {

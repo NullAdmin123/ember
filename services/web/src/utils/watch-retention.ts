@@ -13,10 +13,10 @@ export function watchRetentionText(rule: WatchRetention | undefined, timezone: s
   return `${base}。`
 }
 
-/** 与后端一致校验三项分组保号配置，不把未填写门槛静默转换为可用值。 */
-export function validateWatchRetention(rule: { watchRetentionEnabled: boolean; watchRetentionDays: number; watchRetentionMinMinutes: number }): string {
+/** 校验三项保号配置；门槛未填写仅在关闭时允许，开启时必须为明确的正整数。 */
+export function validateWatchRetention(rule: { watchRetentionEnabled: boolean; watchRetentionDays: number; watchRetentionMinMinutes: number | null | undefined }): string {
   if (!Number.isInteger(rule.watchRetentionDays) || rule.watchRetentionDays < 1 || rule.watchRetentionDays > 3650) return '考核周期须为 1 至 3650 天'
-  const minutes = rule.watchRetentionMinMinutes
+  const minutes = rule.watchRetentionMinMinutes ?? 0
   if (!Number.isInteger(minutes) || minutes < 0 || minutes > 5256000 || (rule.watchRetentionEnabled && minutes === 0)) return '开启观看保号时，请填写 1 至 5256000 的最低观看分钟数'
   return ''
 }

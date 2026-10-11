@@ -15,6 +15,12 @@ describe('观看要求提示', () => {
 })
 
 describe('保号配置校验', () => {
+ it('空门槛仅在关闭时允许，开启必须明确填写', () => {
+  for (const minutes of [undefined, null]) {
+   expect(validateWatchRetention({watchRetentionEnabled:false,watchRetentionDays:30,watchRetentionMinMinutes:minutes})).toBe('')
+   expect(validateWatchRetention({watchRetentionEnabled:true,watchRetentionDays:30,watchRetentionMinMinutes:minutes})).not.toBe('')
+  }
+ })
  it('默认关闭可留空门槛，启用时不能为零或小数', () => {
   expect(validateWatchRetention({watchRetentionEnabled:false,watchRetentionDays:30,watchRetentionMinMinutes:0})).toBe('')
   for (const n of [0,-1,1.5,5256001]) expect(validateWatchRetention({watchRetentionEnabled:true,watchRetentionDays:30,watchRetentionMinMinutes:n})).not.toBe('')

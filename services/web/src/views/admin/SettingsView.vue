@@ -157,6 +157,7 @@ const groupHasChanges = (group: ConfigGroupSection) =>
 const buildUpdatePayload = (item: AdminConfigItem) =>
   buildConfigUpdatePayload(item, draftValues.value[item.key])
 
+/** 保存分组内变更；请求失败时保留草稿并恢复操作状态，便于修正后重试。 */
 const handleSaveGroup = async (group: ConfigGroupSection) => {
   const changedItems = group.items.filter(item => item.editable && isItemDirty(item))
   if (changedItems.length === 0) {
@@ -174,6 +175,8 @@ const handleSaveGroup = async (group: ConfigGroupSection) => {
 
     ElMessage.success(`${group.label}保存成功`)
     await fetchConfigs()
+  } catch {
+    // 请求层已经展示服务端错误，页面只接住异常，不重复提示或重置草稿。
   } finally {
     savingGroups.value[group.key] = false
   }
