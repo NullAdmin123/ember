@@ -43,6 +43,10 @@ type tokenBucket struct {
 	last      time.Time
 	waiters   *list.List
 	stopTimer func()
+	// timerGen identifies the currently armed handle. A callback that
+	// started before stopTimer/re-arm must not clear or replace the
+	// successor; only the matching generation may reschedule.
+	timerGen uint64
 }
 
 type dataPlaneWaiter struct {
@@ -271,11 +275,19 @@ func (limiter *accountRateLimiter) delaySecondsLocked(bucket *tokenBucket, ahead
 	return needed / limiter.config.RPS
 }
 
-func (limiter *accountRateLimiter) armTimerLocked(accountKey string, bucket *tokenBucket) {
+// disarmTimerLocked invalidates any in-flight callback and stops the
+// current handle. AfterFunc Stop does not wait, so generation is the
+// only safe identity once a callback may already be queued on mu.
+func (limiter *accountRateLimiter) disarmTimerLocked(bucket *tokenBucket) {
+	bucket.timerGen++
 	if bucket.stopTimer != nil {
 		bucket.stopTimer()
 		bucket.stopTimer = nil
 	}
+}
+
+func (limiter *accountRateLimiter) armTimerLocked(accountKey string, bucket *tokenBucket) {
+	limiter.disarmTimerLocked(bucket)
 	if bucket.waiters.Len() == 0 {
 		return
 	}
@@ -292,19 +304,19 @@ func (limiter *accountRateLimiter) armTimerLocked(accountKey string, bucket *tok
 		}
 	}
 	delay := durationFromSeconds(waitSeconds)
+	gen := bucket.timerGen
 	bucket.stopTimer = limiter.scheduleAfter(delay, func() {
-		limiter.onTokenTimer(accountKey)
+		limiter.onTokenTimer(accountKey, gen)
 	})
 }
 
-func (limiter *accountRateLimiter) onTokenTimer(accountKey string) {
+func (limiter *accountRateLimiter) onTokenTimer(accountKey string, gen uint64) {
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
 	bucket := limiter.buckets[accountKey]
-	if bucket == nil {
+	if bucket == nil || bucket.timerGen != gen {
 		return
 	}
-	bucket.stopTimer = nil
 	limiter.refillLocked(bucket, limiter.currentTime())
 	limiter.grantReadyLocked(bucket)
 	limiter.armTimerLocked(accountKey, bucket)

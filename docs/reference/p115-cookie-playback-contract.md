@@ -363,6 +363,7 @@ Cookie: <playback-account-cookie>
 - 只接受 HTTP `2xx` 和顶层布尔 `state=true`；`state=false` 映射为 `ErrProviderRejected`，网络/HTTP/JSON/超限错误沿用脱敏 Provider 错误边界。
 - 串行键使用 Cookie 规范化后的 Provider UID，不使用 Ember 账号记录 ID；同一真实 115 账号即使被不同记录引用，也不会在同一进程内并发删除。
 - 同一 UID 的等待支持 context 取消，取消的 waiter 不发送 HTTP；不同 Provider UID 不互相阻塞。
+- 真正发出删除 HTTP 前走同一账号 Cookie/Web 数据面 FIFO 限流；本地 `MaxWait` 拒绝不发送删除请求。CDN Range 读取不取令牌。
 - 锁注册表由进程内所有 `CookieHTTPAdapter` 共享并在无持有者/等待者时清理。未来播放网关多实例部署时，业务层必须再使用数据库任务所有权和 advisory lock 或等价分布式互斥，不能把进程内锁误当成全局锁。
 
 Adapter 不判断一个文件是否应当删除。第二阶段若启用容量回收，业务层必须重新核对成功任务归属、播放账号、目标 parent、file ID、SHA1、size、最后访问时间、保留策略和活跃会话；任一不一致都不得调用删除端点。
@@ -433,7 +434,7 @@ SHA1 + size + isDirectory=false
 - 生产日志先出现父目录解析约 10 秒失败，后又出现目录解析成功、起播许可继承通过，但 `hash_source_preid` 在约 1.21 秒失败。现有样本无法确定后者是直链响应解析、解密还是 Range 校验失败，不把任一假设当作协议事实。
 - Debug `provider_operation_completed` 区分 `source_parent/source_list/download_url/source_range/cookie_get`，记录固定 reason、数值 HTTP 状态、networkPhase、DNS/连接/TLS/首字节与总耗时；复用连接的前几项可以为零，source_range 的总耗时包含先取得下载 URL。HTTP trace 字段不携带域名、IP、URL、Cookie 或原始响应。
 - 失败元数据沿 Provider → DirectPlay → Gateway 传递，最终决策增加 `providerStage/providerReason/providerHTTPStatus`；嵌套直链失败保留 download_url 阶段，不误报为 CDN Range 失败。无精确细分的外部错误使用固定兜底原因，不输出原始错误。
-- DirectPlay 源路径读取及每次 preID/challenge 读取各设 5 秒预算，包含后者获取直链和 Range 两步。主动预算耗尽记 `source_read_timeout`，与真实网络错误分开，不污染账号健康。共享目录的 30 秒总预算、单 HTTP 10 秒底层上限仍保留；最后一个等待者退出会取消共享请求。
+- DirectPlay 源路径读取（`ResolveFileByPath`）使用与共享目录 flight 对齐的 30 秒预算。每次 preID/challenge 的源片段（获取直链 + Range）仍各为 5 秒。主动预算耗尽记 `source_read_timeout`，与真实网络错误分开，不污染账号健康。共享目录的 30 秒总预算、单 HTTP 10 秒底层上限仍保留；最后一个等待者退出会取消共享请求。
 - 不放宽 Range 的状态、范围、编码、长度校验，不自动重试 retained 写入，不把未经验证的外部响应当成功。真实 115 故障根因仍需要部署后细分日志确认；本次验证依赖 mock 和 PostgreSQL 隔离集成。
 
 ## 8. 秒传状态机

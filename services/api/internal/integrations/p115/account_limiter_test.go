@@ -284,6 +284,83 @@ func TestAccountRateLimiterRandomCancelKeepsGrantSpacing(t *testing.T) {
 	assertUniqueGrantSpacing(t, got, time.Duration(float64(time.Second)/rps)-2*time.Millisecond)
 }
 
+func TestAccountRateLimiterStaleTimerDoesNotReplaceSuccessor(t *testing.T) {
+	sched := newTrackedScheduler()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	var nowMu sync.Mutex
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 5 * time.Second})
+	limiter.now = func() time.Time {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		return now
+	}
+	limiter.afterFunc = sched.AfterFunc
+
+	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
+		t.Fatalf("burst token: %v", err)
+	}
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	doneA := make(chan error, 1)
+	go func() { doneA <- limiter.Wait(ctxA, "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 1)
+	if created := sched.createdCount(); created != 1 {
+		t.Fatalf("first arm created %d timers", created)
+	}
+
+	entered := make(chan struct{})
+	released := make(chan struct{})
+	sched.holdNext(entered, released)
+	go sched.fireNext()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("old callback did not start")
+	}
+
+	cancelA()
+	if err := <-doneA; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled waiter error = %v", err)
+	}
+
+	doneB := make(chan error, 1)
+	go func() { doneB <- limiter.Wait(context.Background(), "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 1)
+	if created := sched.createdCount(); created != 2 {
+		t.Fatalf("re-arm created %d timers, want 2", created)
+	}
+
+	close(released)
+	sched.waitIdle(t)
+
+	if created := sched.createdCount(); created != 2 {
+		t.Fatalf("stale callback armed extra timer: created=%d", created)
+	}
+	if max := sched.maxActiveCount(); max > 1 {
+		t.Fatalf("overlapping active timers: max=%d", max)
+	}
+	if active := sched.activeCount(); active != 1 {
+		t.Fatalf("successor timer lost: active=%d", active)
+	}
+
+	nowMu.Lock()
+	now = now.Add(time.Second)
+	nowMu.Unlock()
+	go sched.fireNext()
+	select {
+	case err := <-doneB:
+		if err != nil {
+			t.Fatalf("successor waiter: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successor waiter was not granted")
+	}
+	sched.waitIdle(t)
+	if active := sched.activeCount(); active != 0 {
+		t.Fatalf("timer left armed after grant: active=%d", active)
+	}
+}
+
 func TestMapCookieAPIStatusClassifiesBareStatuses(t *testing.T) {
 	tests := []struct {
 		status  int
@@ -390,6 +467,127 @@ func TestCookieHTTPAdapterPacesDataPlaneCallsPerAccount(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("local queue reject reached 115: calls=%d", calls.Load())
 	}
+}
+
+type trackedScheduler struct {
+	mu          sync.Mutex
+	timers      []*trackedTimer
+	created     int
+	active      int
+	maxActive   int
+	holdEnter   chan struct{}
+	holdRelease chan struct{}
+}
+
+type trackedTimer struct {
+	fn      func()
+	stopped bool
+	started bool
+	done    chan struct{}
+}
+
+func newTrackedScheduler() *trackedScheduler {
+	return &trackedScheduler{}
+}
+
+func (s *trackedScheduler) AfterFunc(_ time.Duration, fn func()) func() {
+	s.mu.Lock()
+	s.created++
+	s.active++
+	if s.active > s.maxActive {
+		s.maxActive = s.active
+	}
+	timer := &trackedTimer{fn: fn, done: make(chan struct{})}
+	s.timers = append(s.timers, timer)
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		if !timer.stopped {
+			s.active--
+			timer.stopped = true
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *trackedScheduler) holdNext(entered, release chan struct{}) {
+	s.mu.Lock()
+	s.holdEnter = entered
+	s.holdRelease = release
+	s.mu.Unlock()
+}
+
+func (s *trackedScheduler) fireNext() {
+	s.mu.Lock()
+	var timer *trackedTimer
+	for _, candidate := range s.timers {
+		if !candidate.stopped && !candidate.started {
+			timer = candidate
+			timer.started = true
+			break
+		}
+	}
+	entered := s.holdEnter
+	release := s.holdRelease
+	if entered != nil {
+		s.holdEnter = nil
+		s.holdRelease = nil
+	}
+	s.mu.Unlock()
+	if timer == nil {
+		return
+	}
+	if entered != nil {
+		close(entered)
+		<-release
+	}
+	timer.fn()
+	s.mu.Lock()
+	if !timer.stopped {
+		s.active--
+		timer.stopped = true
+	}
+	close(timer.done)
+	s.mu.Unlock()
+}
+
+func (s *trackedScheduler) createdCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.created
+}
+
+func (s *trackedScheduler) activeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active
+}
+
+func (s *trackedScheduler) maxActiveCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.maxActive
+}
+
+func (s *trackedScheduler) waitIdle(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		busy := false
+		for _, timer := range s.timers {
+			if timer.started && !timer.stopped {
+				busy = true
+				break
+			}
+		}
+		s.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timer callback did not finish")
 }
 
 type manualClock struct {
