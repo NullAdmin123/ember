@@ -747,6 +747,9 @@ func (a *CookieHTTPAdapter) DeleteFile(ctx context.Context, credential Credentia
 	request.Header.Set("Cookie", credential.Cookie)
 	request.Header.Set("User-Agent", credential.UserAgent)
 
+	if err := a.waitDataPlane(ctx, credential); err != nil {
+		return err
+	}
 	response, err := a.client.Do(request)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrProviderUnavailable, upstream.SafeUpstreamError(err, "p115"))

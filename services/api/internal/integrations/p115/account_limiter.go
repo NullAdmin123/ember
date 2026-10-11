@@ -2,6 +2,7 @@ package p115
 
 import (
 	"context"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -46,7 +47,8 @@ type dataPlaneReservation struct {
 
 // ParseDataPlaneLimitConfig reads optional env overrides. Invalid values keep
 // the conservative defaults rather than disabling protection. RPS=0 remains
-// the explicit bypass; Burst and MaxWait must be positive.
+// the explicit bypass; Inf/NaN and negative RPS keep the default. Burst and
+// MaxWait must be positive.
 func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 	config := DataPlaneLimitConfig{
 		RPS:     defaultDataPlaneRPS,
@@ -54,7 +56,7 @@ func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 		MaxWait: defaultDataPlaneMaxWait,
 	}
 	if value := strings.TrimSpace(os.Getenv("P115_DATA_PLANE_RPS")); value != "" {
-		if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed >= 0 {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed >= 0 && isFiniteRate(parsed) {
 			config.RPS = parsed
 		}
 	}
@@ -69,6 +71,11 @@ func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 		}
 	}
 	return config
+}
+
+// isFiniteRate rejects Inf/NaN so ParseFloat cannot silently disable pacing.
+func isFiniteRate(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 // attachDataPlaneLimiter installs the production per-account token bucket.
@@ -180,9 +187,10 @@ func (limiter *accountRateLimiter) reserve(accountKey string) (dataPlaneReservat
 	return dataPlaneReservation{accountKey: accountKey, readyAt: next, wait: wait}, nil
 }
 
-// cancelReserve drops an unused delayed slot. A tip reservation rewinds last
-// by one interval; when no delayed waiters remain, unused future queue is
-// discarded. Non-tip cancels do not move later reservations earlier.
+// cancelReserve reclaims one future slot for any canceled delayed reservation,
+// including non-tip waiters. Later waiters may oversleep; new arrivals must
+// not inherit a hole that pushes them past MaxWait. When no delayed waiters
+// remain, unused future queue is dropped.
 func (limiter *accountRateLimiter) cancelReserve(reserved dataPlaneReservation) {
 	if limiter == nil || reserved.wait <= 0 || reserved.accountKey == "" {
 		return
@@ -199,9 +207,6 @@ func (limiter *accountRateLimiter) cancelReserve(reserved dataPlaneReservation) 
 		if bucket.last.After(now) {
 			bucket.last = now
 		}
-		return
-	}
-	if !bucket.last.Equal(reserved.readyAt) {
 		return
 	}
 	rewound := bucket.last.Add(-limiter.tokenInterval())

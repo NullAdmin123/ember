@@ -519,7 +519,7 @@ playbackAccountId + SHA1 + size
 - DirectPlay 当前将 `succeeded/credential_rejected/provider_unavailable/provider_rate_limited/provider_risk_control/provider_protocol` 六种固定账号级结果回写到实际调用的 source/playback 账号；Provider 原始错误和响应体不进入账号 Service。
 - `provider_unavailable` 当前按账号进入固定 1 分钟共享冷却，不让每个播放请求独立重试；冷却未到期时不读取 Cookie，到期后用 PostgreSQL 行锁续租并只放行一个半开探测，成功立即恢复 `active`，失败重新冷却。
 - `provider_rate_limited` 默认冷却 15 秒，`provider_risk_control` 默认冷却 30 秒，均保留启用意图，不进入 `expired + disabled`。冷却时长可通过 `P115_RATE_LIMIT_COOLDOWN` / `P115_RISK_CONTROL_COOLDOWN` 覆盖；非正值保留默认。
-- Cookie/Web 数据面按账号做本地令牌桶限流；`Burst`/`MaxWait` 必须为正，`MaxWait=0` 不表示零等待或无限排队。115 API `429` 使用 `ErrProviderRateLimited` 并短暂冷却；本地等待超过 `MaxWait` 使用 `ErrDataPlaneQueueLimited`，不回写账号健康、不进入共享冷却，该请求仍回退 Emby。API `403` 使用 `ErrProviderRiskControl`。等待期间取消会回滚未使用的预留。CDN Range 读取不套用该 HTTP 映射。对外仍按 Provider 不可用回退 Emby，不改变播放器可见行为。
+- Cookie/Web 数据面按账号做本地令牌桶限流，覆盖源列表、SHA1 查重、downurl、秒传和删除；`Burst`/`MaxWait` 必须为正，`MaxWait=0` 不表示零等待或无限排队。`RPS=0` 关闭等待；`Inf`/`NaN` 保留默认。115 API `429` 使用 `ErrProviderRateLimited` 并短暂冷却；本地等待超过 `MaxWait` 使用 `ErrDataPlaneQueueLimited`，不回写账号健康、不进入共享冷却，该请求仍回退 Emby。API `403` 使用 `ErrProviderRiskControl`。任意未完成预留取消都会回收一个未来槽。CDN Range 读取不取令牌，也不套用该 HTTP 映射。对外仍按 Provider 不可用回退 Emby，不改变播放器可见行为。
 - `credential_rejected` 进入 `expired + disabled`，`provider_protocol` 进入 `error`；请求取消、大目录解析超时、本地数据面排队拒绝、目标文件不可见、下载 Header 不兼容等文件/请求级失败不污染账号健康。
 - 运行期回写同时匹配请求加载时的 Cookie 密文和 `updated_at`；旧请求不能覆盖 Cookie 替换、显式验证、手工启停或较新的运行期结果。健康回写失败不改变原始 302/fallback 结果。
 - Cookie 失效、账号风控、下载地址不兼容、普通上传要求、本地数据面排队拒绝和 Provider 限流必须使用不同内部错误码。

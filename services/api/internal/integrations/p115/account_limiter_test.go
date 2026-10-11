@@ -64,6 +64,18 @@ func TestParseDataPlaneLimitConfigRejectsNonPositiveBurstAndMaxWait(t *testing.T
 	}
 }
 
+func TestParseDataPlaneLimitConfigRejectsNonFiniteRPS(t *testing.T) {
+	for _, value := range []string{"Inf", "+Inf", "-Inf", "NaN", "nan"} {
+		t.Setenv("P115_DATA_PLANE_RPS", value)
+		t.Setenv("P115_DATA_PLANE_BURST", "")
+		t.Setenv("P115_DATA_PLANE_MAX_WAIT", "")
+		config := ParseDataPlaneLimitConfig()
+		if config.RPS != defaultDataPlaneRPS {
+			t.Fatalf("RPS %q leaked as %v, want default %v", value, config.RPS, defaultDataPlaneRPS)
+		}
+	}
+}
+
 func TestAccountRateLimiterRejectsWhenWaitExceedsMax(t *testing.T) {
 	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: time.Millisecond})
 	now := time.Now()
@@ -124,7 +136,7 @@ func TestAccountRateLimiterCanceledWaitRestoresCapacity(t *testing.T) {
 	}
 }
 
-func TestAccountRateLimiterCancelOnlyRewindsTipReservation(t *testing.T) {
+func TestAccountRateLimiterNonTipCancelRestoresCapacity(t *testing.T) {
 	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
 	now := time.Unix(1_700_000_000, 0).UTC()
 	limiter.now = func() time.Time { return now }
@@ -136,20 +148,21 @@ func TestAccountRateLimiterCancelOnlyRewindsTipReservation(t *testing.T) {
 	if err != nil || earlier.wait != time.Second {
 		t.Fatalf("earlier reservation = %s err=%v, want 1s", earlier.wait, err)
 	}
-	tip, err := limiter.reserve("uid-1")
-	if err != nil || tip.wait != 2*time.Second {
-		t.Fatalf("tip reservation = %s err=%v, want 2s", tip.wait, err)
+	later, err := limiter.reserve("uid-1")
+	if err != nil || later.wait != 2*time.Second {
+		t.Fatalf("later reservation = %s err=%v, want 2s", later.wait, err)
 	}
 
 	limiter.cancelReserve(earlier)
-	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrDataPlaneQueueLimited) {
-		t.Fatalf("canceling a non-tip reservation moved later slots: %v", err)
+	reused, err := limiter.reserve("uid-1")
+	if err != nil || reused.wait != 2*time.Second {
+		t.Fatalf("after non-tip cancel wait = %s err=%v, want restored 2s slot not queue limit", reused.wait, err)
 	}
-
-	limiter.cancelReserve(tip)
+	limiter.cancelReserve(reused)
+	limiter.cancelReserve(later)
 	restored, err := limiter.reserve("uid-1")
 	if err != nil || restored.wait != time.Second {
-		t.Fatalf("after tip cancel wait = %s err=%v, want restored 1s refill", restored.wait, err)
+		t.Fatalf("after remaining cancels wait = %s err=%v, want 1s refill", restored.wait, err)
 	}
 }
 
