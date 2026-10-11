@@ -218,6 +218,10 @@ make test-bot-report
 
 在 `services/api` 执行 `go test ./internal/services/entitlement ./internal/services/payment ./internal/services/user ./internal/services/system ./internal/integrations/emby -skip Integration`，覆盖保号起算、失效/恢复、调度边界、SQL mock 回滚及插件响应合同。`TestIntegrationWatchRetentionLifecycle` 仅在专用 `EMBER_INTEGRATION_DATABASE_URL` 配置后执行，验证真实 PostgreSQL 迁移重放与生命周期，外部播放及 Policy 使用 fake。
 
+2026-10-11 增加恢复与公平扫描专项：在同一专用数据库配置下执行 `go test ./internal/app -run '^TestIntegrationWatchRetention' -count=1 -v`。覆盖提交后中断的禁用/降组恢复、已有活跃任务替换及批次保留、即时同步成功/失败、成功或失败前缀后的跨轮推进、进度迁移重放。配置、首次日期和运行期注册统一拒绝 `@every`；旧配置暂停后权益展示仍可读取，由 `config`、`entitlement` 和 `user` 包单测覆盖。
+
+基于 `8be5635` 的本轮未提交修复已通过全量非集成 Go 测试、`go vet ./...`、`go build ./...`，以及 `entitlement/policy/user/config` 四包竞态检测；完整 `internal/app` PostgreSQL 集成回归通过，零跳过。外部依赖均为 mock/fake，临时 schema 自动清理；未启动服务，未验证真实 Emby 或浏览器。
+
 Web 使用 `npm run test` 覆盖 `watch-retention`、分组表单、概览和持有权益；Bot 格式化回归验证失效永久权益不再显示为永久。测试不请求真实 Emby 或 Telegram，不启动项目服务。
 
 2026-10-08 补充 PostgreSQL 实测：从本机私有 `~/.config/zsh/local.zsh` 显式注入专用连接后，`TestIntegrationWatchRetentionLifecycle` 通过；另外 `TestIntegrationEntitlementMigrationAndFallback`、`TestIntegrationRedemptionPermanentValidity`、`TestIntegrationRedemptionValidityUpgrade`、`TestIntegrationAdminTransferGroup`、`TestIntegrationAdminTransferGroupRejectsConflict`、`TestIntegrationUserEntitlementFilter` 六项通过。均在独立 `itest_*` schema 中运行并自动清理，外部播放与权限同步为 fake；此次结果不扩展为真实 Emby 或浏览器验收。

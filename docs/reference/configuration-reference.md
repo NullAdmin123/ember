@@ -309,4 +309,4 @@ Bot 进程当前仍主要依赖环境变量启动；`.env.example` 保留启动�
 
 ## 观看保号调度
 
-`WATCH_RETENTION_SCHEDULE` 属于设置中心运行期数据库配置，默认 `0 2 * * *`；不读取同名环境变量，使用 `CRON_TIMEZONE`，受 `CRON_ENABLED` 控制。表达式禁止自带 `TZ`/`CRON_TZ`，修改后重启 API 生效。分组开关、周期与分钟数通过分组接口配置，不新增部署环境变量。详细行为见[观看保号运行手册](../runbooks/watch-retention.md)。
+`WATCH_RETENTION_SCHEDULE` 属于设置中心运行期数据库配置，默认 `0 2 * * *`；不读取同名环境变量，使用 `CRON_TIMEZONE`，受 `CRON_ENABLED` 控制。只支持五字段日历 cron 及 `@daily` 等日历描述符；禁止自带 `TZ`/`CRON_TZ`，拒绝 `@every` 间隔表达式。保存、运行期注册及首次日期计算共用该合同，修改后重启 API 生效。已有不支持的配置会暂停保号并记录错误，其他 cron 保持运行，权益展示不再提供检查日期；管理员修正后重启恢复。分组开关、周期与分钟数通过分组接口配置，不新增部署环境变量。详细行为见[观看保号运行手册](../runbooks/watch-retention.md)。

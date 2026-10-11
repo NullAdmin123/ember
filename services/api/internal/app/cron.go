@@ -113,18 +113,21 @@ func initCronJobs() func() {
 	taskRegistered := false
 	retentionSchedule := retentionExpression
 	retentionWorker := &entitlementpkg.WatchRetentionWorker{DB: db.DB, Location: tz, Schedule: retentionSchedule, Query: embyint.GetSharedService().WatchRetentionSeconds, Sync: func(id string) error {
-		return policyService.ApplyEffectiveUserPolicyOrRecordFailure(id, "watch_retention")
+		return policyService.ProcessPendingUserPolicySync(context.Background(), id)
 	}}
-	if _, err := c.AddFunc(retentionSchedule, func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer cancel()
-		if err := retentionWorker.Run(ctx, time.Now()); err != nil {
-			log.Printf("[WatchRetention] 任务未全部完成: %v", err)
+	if entitlementpkg.RegisteredRetentionSchedule().Enabled {
+		if _, err := c.AddFunc(retentionSchedule, func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			if err := retentionWorker.Run(ctx, time.Now()); err != nil {
+				log.Printf("[WatchRetention] 任务未全部完成: %v", err)
+			}
+		}); err != nil {
+			entitlementpkg.RegisterRetentionSchedule(retentionSchedule, tz, false)
+			log.Printf("观看保号调度注册失败: %v", err)
+		} else {
+			taskRegistered = true
 		}
-	}); err != nil {
-		log.Printf("观看保号调度注册失败: %v", err)
-	} else {
-		taskRegistered = true
 	}
 
 	if _, err := c.AddFunc("0 3 * * *", func() {

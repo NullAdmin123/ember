@@ -2256,8 +2256,22 @@ func TestHTTPReachable(rawURL string) error {
 
 // validateWatchRetentionCron preserves the sole global timezone while accepting configurable cron times.
 func validateWatchRetentionCron(value string) error {
+	_, err := ParseWatchRetentionSchedule(value)
+	return err
+}
+
+// ParseWatchRetentionSchedule shares the calendar-only contract across settings, cron and first-check dates.
+// Interval schedules depend on process start time, so they cannot provide a reproducible first check.
+func ParseWatchRetentionSchedule(value string) (cron.Schedule, error) {
 	if strings.Contains(value, "TZ=") {
-		return errors.New("观看保号计划必须使用全局业务时区")
+		return nil, errors.New("观看保号计划必须使用全局业务时区")
 	}
-	return validateCronExpression(value)
+	schedule, err := cron.ParseStandard(strings.TrimSpace(value))
+	if err != nil {
+		return nil, errors.New("观看保号 cron 表达式无效")
+	}
+	if _, calendar := schedule.(*cron.SpecSchedule); !calendar {
+		return nil, errors.New("观看保号仅支持日历 cron，不支持 @every 间隔表达式")
+	}
+	return schedule, nil
 }

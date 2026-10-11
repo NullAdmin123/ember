@@ -676,3 +676,7 @@ MediaGapScan                    （缺集扫描持久化记录，advisory lock �
 `plan_groups` 新增 `watch_retention_enabled`（默认 false）、`watch_retention_days`（默认 30）、`watch_retention_min_minutes`（默认 0，开启须正数）三项配置；内部 `watch_retention_reset_at` 标记最近启用/规则变化时间。`user_entitlements` 增加 `watch_retention_started_at` 与 `watch_retention_invalidated_at`，分别记录本轮实际接替及失效；永久期限不再等于无条件有效。`watch_retention_checks` 保存窗口、门槛、累计秒数和判定，用户删除时级联删除，不依赖当前分组仍存在。
 
 迁移为 `20261008_01_watch_retention.sql`，可重复执行，默认关闭且不回填历史失效；完整流转见[运行手册](../runbooks/watch-retention.md)。
+
+`20261011_01_watch_retention_scan_progress.sql` 新增 `watch_retention_scan_states`：`user_id` 为主键并关联用户删除级联，`last_attempt_at` 为最近扫描尝试时间。每用户最多一条，独立于权益和考核审计；失败或中断也更新进度，使下轮优先覆盖尚未触达用户。无历史回填，重复迁移不清空进度。
+
+保号导致访问投影变化时，在同一事务复用 `emby_policy_sync_tasks` 保存 pending 任务，不新增同步任务表或字段。已有 pending/processing 任务被替换为新 ID，保留原 `batch_id`；旧 worker 按旧 ID 完成或回收时不能覆盖新意图。

@@ -869,10 +869,14 @@ func TestReadOnlyBoundaryConfigDefinitionsExposeHints(t *testing.T) {
 
 // TestWatchRetentionScheduleRejectsTimezoneOverride keeps all business dates on CRON_TIMEZONE.
 func TestWatchRetentionScheduleRejectsTimezoneOverride(t *testing.T) {
-	if err := validateWatchRetentionCron("0 4 * * *"); err != nil {
-		t.Fatal(err)
+	for _, expression := range []string{"0 4 * * *", "@daily", "@weekly"} {
+		if err := validateWatchRetentionCron(expression); err != nil {
+			t.Fatalf("calendar schedule %q rejected: %v", expression, err)
+		}
 	}
-	if err := validateWatchRetentionCron("CRON_TZ=UTC 0 4 * * *"); err == nil {
-		t.Fatal("accepted timezone override")
+	for _, expression := range []string{"CRON_TZ=UTC 0 4 * * *", "TZ=UTC 0 4 * * *", "@every 24h", "@every 1h", "invalid"} {
+		if err := validateWatchRetentionCron(expression); err == nil {
+			t.Fatalf("accepted unsupported retention schedule %q", expression)
+		}
 	}
 }

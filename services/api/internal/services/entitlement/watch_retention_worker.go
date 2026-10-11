@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/konghang/ember/backend/internal/models"
+	policypkg "github.com/konghang/ember/backend/internal/services/policy"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"log"
@@ -41,13 +42,18 @@ func RetentionStart(holding models.UserEntitlement, group models.PlanGroup) *tim
 	return start
 }
 
-// Run examines only currently applied ordinary-user groups; inactive holdings do not consume grace.
+// Run examines currently applied ordinary-user groups, prioritizing users not attempted recently.
+// Durable attempt progress lets a later process continue after cancellation or upstream failure.
 func (w *WatchRetentionWorker) Run(ctx context.Context, at time.Time) error {
 	if w.DB == nil || w.Query == nil || w.Location == nil {
 		return errors.New("保号任务未配置")
 	}
 	var users []models.User
-	if err := w.DB.WithContext(ctx).Model(&models.User{}).Joins("JOIN plan_groups g ON g.key = users.plan_group").Where("users.role = 'user' AND users.resource_access_granted = true AND g.watch_retention_enabled = true").Order("users.id").Find(&users).Error; err != nil {
+	if err := w.DB.WithContext(ctx).Model(&models.User{}).Select("users.*").
+		Joins("JOIN plan_groups g ON g.key = users.plan_group").
+		Joins("LEFT JOIN watch_retention_scan_states scan ON scan.user_id = users.id").
+		Where("users.role = 'user' AND users.resource_access_granted = true AND g.watch_retention_enabled = true").
+		Order("scan.last_attempt_at ASC NULLS FIRST, users.id").Find(&users).Error; err != nil {
 		return err
 	}
 	log.Printf("[WatchRetention] 开始考核 candidates=%d checkedAt=%s", len(users), at.In(w.Location).Format(time.RFC3339))
@@ -55,6 +61,11 @@ func (w *WatchRetentionWorker) Run(ctx context.Context, at time.Time) error {
 	for _, user := range users {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if err := w.recordAttempt(ctx, user.ID, at); err != nil {
+			failures++
+			log.Printf("[WatchRetention] 扫描进度保存失败，跳过考核 userId=%s errorType=%T", user.ID, err)
+			continue
 		}
 		snapshot, err := w.snapshot(ctx, user.ID, false)
 		if err != nil {
@@ -106,6 +117,14 @@ func (w *WatchRetentionWorker) Run(ctx context.Context, at time.Time) error {
 		return fmt.Errorf("观看保号存在 %d 个处理失败", failures)
 	}
 	return nil
+}
+
+// recordAttempt commits progress before reading/querying evidence, including attempts that later fail.
+// A single upsert needs no outer transaction; older overlapping runs cannot move progress backwards.
+func (w *WatchRetentionWorker) recordAttempt(ctx context.Context, userID string, at time.Time) error {
+	return w.DB.WithContext(ctx).Exec(`INSERT INTO watch_retention_scan_states (user_id, last_attempt_at)
+ VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE
+ SET last_attempt_at = GREATEST(watch_retention_scan_states.last_attempt_at, EXCLUDED.last_attempt_at)`, userID, at).Error
 }
 
 // snapshot optionally locks the user and policy for final revalidation inside a transaction.
@@ -182,6 +201,11 @@ func (w *WatchRetentionWorker) apply(ctx context.Context, old *retentionSnapshot
 			changed, err = ReconcileLocked(tx, &fresh.User, ranks, at)
 			if err != nil {
 				return err
+			}
+			if changed {
+				if err := policypkg.EnqueueUserPolicySyncTx(tx, &fresh.User, "watch_retention"); err != nil {
+					return err
+				}
 			}
 		}
 		log.Printf("[WatchRetention] 考核完成 userId=%s group=%s start=%s end=%s seconds=%d minMinutes=%d invalidated=%t", record.UserID, record.PlanGroup, start.Format(time.RFC3339), at.Format(time.RFC3339), seconds, record.MinMinutes, record.Invalidated)

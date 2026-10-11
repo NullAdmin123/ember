@@ -103,6 +103,7 @@ func VerifySchema() error {
 		{"user_entitlements", &models.UserEntitlement{}},
 		{"entitlement_events", &models.EntitlementEvent{}},
 		{"watch_retention_checks", &models.WatchRetentionCheck{}},
+		{"watch_retention_scan_states", &models.WatchRetentionScanState{}},
 		{"redemption_codes", &models.RedemptionCode{}},
 		{"redemptions", &models.Redemption{}},
 		{"settings", &models.Setting{}},
@@ -203,6 +204,7 @@ type schemaFingerprintIndex struct {
 // 维护规则：每次在 infrastructure/database/ 新增顶层 migration 后，把其中"在已有表上 ADD COLUMN"
 // 的代表性列追加到这里；漏维护会导致 VerifySchema 放过缺该 migration 的环境。
 var schemaFingerprintColumns = []schemaFingerprintColumn{
+	{"watch_retention_scan_states", "last_attempt_at", "20261011_01_watch_retention_scan_progress"},
 	{"plan_groups", "watch_retention_enabled", "20261008_01_watch_retention"},
 	{"user_entitlements", "watch_retention_invalidated_at", "20261008_01_watch_retention"},
 	{"watch_retention_checks", "watched_seconds", "20261008_01_watch_retention"},

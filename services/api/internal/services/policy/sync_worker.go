@@ -80,6 +80,27 @@ func buildUserPolicySyncRetryTask(user *models.User, reason string, cause error,
 // ProcessPendingEmbyPolicySyncTasks 回收超时 processing 任务，逐条领取并同步，最多执行 limit 条。
 // 未开始的任务保持 pending，避免 worker 取消后等待超时回收。
 func (s *Service) ProcessPendingEmbyPolicySyncTasks(ctx context.Context, limit int) (*EmbyPolicySyncWorkerResult, error) {
+	return s.processPendingEmbyPolicySyncTasks(ctx, limit, "")
+}
+
+// ProcessPendingUserPolicySync immediately consumes a committed user intent through the normal task lifecycle.
+// If another worker already owns it, that worker or processing-timeout recovery will finish it.
+func (s *Service) ProcessPendingUserPolicySync(ctx context.Context, userID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return errors.New("Policy 同步用户不能为空")
+	}
+	result, err := s.processPendingEmbyPolicySyncTasks(ctx, 1, userID)
+	if err != nil {
+		return err
+	}
+	if result.Failed > 0 {
+		return errors.New("用户 Emby Policy 同步失败，已保留失败任务")
+	}
+	return nil
+}
+
+// processPendingEmbyPolicySyncTasks shares claiming, completion and batch accounting between immediate and scheduled delivery.
+func (s *Service) processPendingEmbyPolicySyncTasks(ctx context.Context, limit int, userID string) (*EmbyPolicySyncWorkerResult, error) {
 	if s == nil || s.db == nil {
 		return nil, errors.New("Policy 服务未配置数据库")
 	}
@@ -91,13 +112,15 @@ func (s *Service) ProcessPendingEmbyPolicySyncTasks(ctx context.Context, limit i
 	}
 	result := &EmbyPolicySyncWorkerResult{}
 
-	recovered, recoveredBatchIDs, err := s.recoverStalePolicySyncTasks(ctx, defaultPolicySyncProcessingTTL)
-	if err != nil {
-		return nil, err
-	}
-	result.Recovered = recovered
-	if err := s.refreshBatchIDs(recoveredBatchIDs); err != nil {
-		return nil, err
+	if userID == "" {
+		recovered, recoveredBatchIDs, err := s.recoverStalePolicySyncTasks(ctx, defaultPolicySyncProcessingTTL)
+		if err != nil {
+			return nil, err
+		}
+		result.Recovered = recovered
+		if err := s.refreshBatchIDs(recoveredBatchIDs); err != nil {
+			return nil, err
+		}
 	}
 
 	for result.Claimed < limit {
@@ -105,7 +128,7 @@ func (s *Service) ProcessPendingEmbyPolicySyncTasks(ctx context.Context, limit i
 			return result, err
 		}
 		// 只领取马上执行的任务；取消或提前返回时，其他任务仍可由下一轮领取。
-		tasks, err := s.claimPendingPolicySyncTasks(ctx, 1)
+		tasks, err := s.claimPendingPolicySyncTasks(ctx, 1, userID)
 		if err != nil {
 			return result, err
 		}
@@ -155,15 +178,18 @@ func policySyncTaskFinishContext(ctx context.Context) (context.Context, context.
 }
 
 // claimPendingPolicySyncTasks 在事务中锁定到期 pending 任务并标记为 processing。
-func (s *Service) claimPendingPolicySyncTasks(ctx context.Context, limit int) ([]models.EmbyPolicySyncTask, error) {
+func (s *Service) claimPendingPolicySyncTasks(ctx context.Context, limit int, userID string) ([]models.EmbyPolicySyncTask, error) {
 	var tasks []models.EmbyPolicySyncTask
 	now := time.Now().UTC()
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where("status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)", SyncStatusPending, now).
 			Order("next_retry_at ASC NULLS FIRST, created_at ASC").
-			Limit(limit).
-			Find(&tasks).Error; err != nil {
+			Limit(limit)
+		if userID != "" {
+			query = query.Where("user_id = ?", userID)
+		}
+		if err := query.Find(&tasks).Error; err != nil {
 			return err
 		}
 		if len(tasks) == 0 {

@@ -1059,8 +1059,9 @@ Telegram 账号绑定与 Bot 自助能力服务。
 ### 10.1 分组观看保号
 
 - 分组三项配置为 `watchRetentionEnabled/watchRetentionDays/watchRetentionMinMinutes`；默认关闭，观察期与统计窗口共用周期，默认 30 天。`UserEntitlement` 保存本轮实际接替起点及保号失效时间，分组内部重开时间处理规则变更，不重复配置用户级门槛。
-- `WATCH_RETENTION_SCHEDULE` 为设置中心可配置 cron，默认 `0 2 * * *`，受 `CRON_ENABLED` 控制并统一使用 `CRON_TIMEZONE`，重启 API 后生效。只考核当前生效权益；被其他组替代时暂停，重新接替时重开完整周期。关闭保号不恢复已失效权益。
-- `WatchRetentionWorker` 在事务外调用固定版本 Playback Reporting 聚合电影/剧集累计秒数，事务内重查用户/组/起点后写入审计、失效标记及访问投影。查询故障不按零处理；没有任何有效权益才停用资源访问。提交后复用 Policy 失败记录/重试，不解除人工限制。
+- `WATCH_RETENTION_SCHEDULE` 为设置中心可配置的日历 cron，默认 `0 2 * * *`，受 `CRON_ENABLED` 控制并统一使用 `CRON_TIMEZONE`，重启 API 后生效。保存、运行期注册和首次日期计算共用校验，拒绝 `@every`；已有不支持的配置暂停保号并记录修正提示，权益仍可读取且不显示检查日期。只考核当前生效权益；被其他组替代时暂停，重新接替时重开完整周期。关闭保号不恢复已失效权益。
+- `WatchRetentionWorker` 在事务外调用固定版本 Playback Reporting 聚合电影/剧集累计秒数，事务内重查用户/组/起点后写入审计、失效标记、访问投影及待同步 Policy 任务。提交后按用户立即消费任务；中断由既有 Policy worker 补偿，外部失败保留 failed 记录供管理员重试。替换已有活跃任务时换新任务 ID、保留批次关系，旧 worker 不能关闭新意图。查询故障不按零处理；没有任何有效权益才停用资源访问，不解除人工限制。
+- `watch_retention_scan_states` 每用户保存最近尝试时间，读取状态和查询播放前独立落库；每轮先处理从未尝试及最久未尝试的用户。10 分钟预算耗尽或进程重启后，下一轮优先覆盖尚未触达者；失败也推进顺序，不生成虚假观看判定。迁移为 `20261011_01_watch_retention_scan_progress.sql`，无历史回填，用户删除时级联清理。
 - 概览“服务状态”显示当前组要求，账号中心持有权益逐条显示开启保号的要求，未开启则隐藏；服务端给出首次检查日期。Bot 权益摘要识别失效标记，避免将失效永久权益显示为永久可用。
 - 配置、实际流程、恢复及外部统计限制见[观看保号运行手册](./runbooks/watch-retention.md)。本轮已完成专用 PostgreSQL 隔离集成验证，未完成真实 Emby 或浏览器验收。
 

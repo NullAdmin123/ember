@@ -2,10 +2,11 @@ package entitlement
 
 import (
 	"errors"
-	"github.com/robfig/cron/v3"
-	"strings"
+	"log"
 	"sync/atomic"
 	"time"
+
+	configpkg "github.com/konghang/ember/backend/internal/config"
 )
 
 // FirstWatchRetentionCheck returns the first configured run at or after a full business-calendar period.
@@ -13,10 +14,7 @@ func FirstWatchRetentionCheck(start time.Time, days int, expression string, loca
 	if location == nil || days < 1 || days > 3650 {
 		return time.Time{}, errors.New("观看保号周期须为 1..3650 天")
 	}
-	if strings.Contains(expression, "TZ=") {
-		return time.Time{}, errors.New("观看保号计划必须使用全局业务时区")
-	}
-	schedule, err := cron.ParseStandard(expression)
+	schedule, err := configpkg.ParseWatchRetentionSchedule(expression)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -37,8 +35,13 @@ type RetentionSchedule struct {
 
 var registeredRetentionSchedule atomic.Pointer[RetentionSchedule]
 
-// RegisterRetentionSchedule publishes the same immutable schedule used by the cron process.
+// RegisterRetentionSchedule publishes the cron contract, suspending unsupported stored configurations.
+// Other cron jobs remain enabled; users must not be shown invented first-check dates.
 func RegisterRetentionSchedule(expression string, location *time.Location, enabled bool) {
+	if _, err := configpkg.ParseWatchRetentionSchedule(expression); err != nil {
+		enabled = false
+		log.Printf("[WatchRetention] 调度配置无效，暂停考核；请在设置中心改用日历 cron 并重启 API: %v", err)
+	}
 	registeredRetentionSchedule.Store(&RetentionSchedule{Expression: expression, Location: location, Enabled: enabled})
 }
 

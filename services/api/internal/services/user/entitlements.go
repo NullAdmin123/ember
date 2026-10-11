@@ -63,19 +63,15 @@ func (s *UserService) GetEntitlements(ctx context.Context, userID string) ([]Ent
 		enabled = runtime.Enabled
 	}
 	for i := range rows {
-		if err := attachWatchRetentionView(&rows[i], time.Now(), schedule, loc); err != nil {
+		if err := attachWatchRetentionView(&rows[i], time.Now(), schedule, loc, enabled); err != nil {
 			return nil, err
-		}
-		if !enabled && rows[i].WatchRetention != nil && rows[i].Current && rows[i].WatchRetentionInvalidatedAt == nil {
-			rows[i].WatchRetention.State = "suspended"
-			rows[i].WatchRetention.FirstCheckAt = nil
 		}
 	}
 	return rows, nil
 }
 
 // attachWatchRetentionView derives display stages from server facts without mutating entitlement state.
-func attachWatchRetentionView(row *EntitlementView, now time.Time, schedule string, loc *time.Location) error {
+func attachWatchRetentionView(row *EntitlementView, now time.Time, schedule string, loc *time.Location, enabled bool) error {
 	if !row.RetentionEnabled {
 		return nil
 	}
@@ -87,6 +83,10 @@ func attachWatchRetentionView(row *EntitlementView, now time.Time, schedule stri
 	}
 	if row.ExpiresAt != nil && !row.ExpiresAt.After(now) && !row.Current {
 		view.State = "expired"
+		return nil
+	}
+	if !enabled {
+		view.State = "suspended"
 		return nil
 	}
 	if !row.Current {

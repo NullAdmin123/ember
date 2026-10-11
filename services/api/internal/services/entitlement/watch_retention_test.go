@@ -47,6 +47,30 @@ func TestWatchRetentionSchedule(t *testing.T) {
 	if _, err = FirstWatchRetentionCheck(start, 30, "bad", loc); err == nil {
 		t.Fatal("accepted invalid cron")
 	}
+	if _, err = FirstWatchRetentionCheck(start, 30, "@every 24h", loc); err == nil {
+		t.Fatal("accepted interval schedule without runtime phase")
+	}
+}
+
+// TestRegisterRetentionScheduleSuspendsUnsupportedSettings protects upgrades with an existing interval expression.
+func TestRegisterRetentionScheduleSuspendsUnsupportedSettings(t *testing.T) {
+	previous := registeredRetentionSchedule.Load()
+	t.Cleanup(func() { registeredRetentionSchedule.Store(previous) })
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	for _, tc := range []struct {
+		expression string
+		enabled    bool
+		want       bool
+	}{
+		{"@every 24h", true, false}, {"invalid", true, false},
+		{"0 2 * * *", true, true}, {"@daily", true, true}, {"0 2 * * *", false, false},
+	} {
+		RegisterRetentionSchedule(tc.expression, loc, tc.enabled)
+		state := RegisteredRetentionSchedule()
+		if state.Enabled != tc.want || state.Expression != tc.expression || state.Location != loc {
+			t.Fatalf("runtime schedule=%+v want enabled=%t", state, tc.want)
+		}
+	}
 }
 
 // TestRetentionPolicyResetAndSnapshot covers paused/restarted grants and stale query rejection.

@@ -22,7 +22,7 @@ func TestWatchRetentionDisplay(t *testing.T) {
 			if tc.invalid {
 				row.WatchRetentionInvalidatedAt = &start
 			}
-			if err := attachWatchRetentionView(&row, start, "0 2 * * *", loc); err != nil {
+			if err := attachWatchRetentionView(&row, start, "0 2 * * *", loc, true); err != nil {
 				t.Fatal(err)
 			}
 			if tc.want == "" {
@@ -38,5 +38,20 @@ func TestWatchRetentionDisplay(t *testing.T) {
 				t.Fatal("wrong first check")
 			}
 		})
+	}
+}
+
+// TestWatchRetentionSuspendedScheduleKeepsEntitlementsReadable covers existing unsupported cron settings.
+func TestWatchRetentionSuspendedScheduleKeepsEntitlementsReadable(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	now := time.Date(2026, 10, 11, 15, 0, 0, 0, loc)
+	for _, current := range []bool{false, true} {
+		row := EntitlementView{UserEntitlement: models.UserEntitlement{ValidityType: "permanent", WatchRetentionStartedAt: &now}, RetentionEnabled: true, RetentionDays: 30, RetentionMinutes: 60, Current: current}
+		if err := attachWatchRetentionView(&row, now, "@every 24h", loc, false); err != nil {
+			t.Fatal(err)
+		}
+		if row.WatchRetention.State != "suspended" || row.WatchRetention.FirstCheckAt != nil {
+			t.Fatalf("suspended schedule advertises checks: %+v", row.WatchRetention)
+		}
 	}
 }

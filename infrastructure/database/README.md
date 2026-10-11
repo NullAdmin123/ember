@@ -196,3 +196,7 @@ baseline 必须与运行库 schema **字段级等价**，且与 `services/api/in
 ## 2026-10-08 观看保号迁移
 
 `20261008_01_watch_retention.sql` 增加分组三项配置及内部重开时间、用户权益起点/失效标记和 `watch_retention_checks` 审计表。默认关闭、不使存量权益失效；可重复执行，启动指纹已同步。启用前核对插件版本、时区与播放历史保留范围，见[观看保号运行手册](../../docs/runbooks/watch-retention.md)。2026-10-08 已在专用 PostgreSQL 的隔离 schema 中执行观看保号生命周期用例，覆盖新库迁移、重复执行、起算、失效和重新购买；未在业务 schema 执行本次迁移。
+
+## 2026-10-11 观看保号扫描进度
+
+`20261011_01_watch_retention_scan_progress.sql` 新建 `watch_retention_scan_states(user_id, last_attempt_at)`，每用户一条最近尝试记录，用户删除时级联清理。用于在任务取消、超时或重启后优先处理尚未触达用户，不改权益或判定审计。无历史回填，可重复执行且保留已有进度；模型、表检查与启动指纹已同步。已在专用 PostgreSQL 隔离 schema 验证迁移重放和跨轮推进，未在业务 schema 执行。
