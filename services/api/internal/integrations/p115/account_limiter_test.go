@@ -71,8 +71,8 @@ func TestAccountRateLimiterRejectsWhenWaitExceedsMax(t *testing.T) {
 	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
 		t.Fatalf("first token: %v", err)
 	}
-	if err := limiter.Wait(context.Background(), "uid-1"); !errors.Is(err, ErrProviderRateLimited) {
-		t.Fatalf("second token error = %v, want rate limited", err)
+	if err := limiter.Wait(context.Background(), "uid-1"); !errors.Is(err, ErrDataPlaneQueueLimited) || errors.Is(err, ErrProviderRateLimited) {
+		t.Fatalf("second token error = %v, want local queue limit", err)
 	}
 	if err := limiter.Wait(context.Background(), "uid-2"); err != nil {
 		t.Fatalf("other account was throttled: %v", err)
@@ -142,7 +142,7 @@ func TestAccountRateLimiterCancelOnlyRewindsTipReservation(t *testing.T) {
 	}
 
 	limiter.cancelReserve(earlier)
-	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrProviderRateLimited) {
+	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrDataPlaneQueueLimited) {
 		t.Fatalf("canceling a non-tip reservation moved later slots: %v", err)
 	}
 
@@ -169,7 +169,7 @@ func TestAccountRateLimiterStaggersConcurrentReservationsAndEnforcesMaxWait(t *t
 	if err != nil || second.wait != 2*time.Second {
 		t.Fatalf("second waiter = %s err=%v, want 2s", second.wait, err)
 	}
-	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrProviderRateLimited) {
+	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrDataPlaneQueueLimited) {
 		t.Fatalf("third waiter error = %v, want cumulative MaxWait reject", err)
 	}
 }
@@ -207,8 +207,32 @@ func TestInitRapidUploadTakesOneTokenPerHTTPRequest(t *testing.T) {
 	if _, err := adapter.InitRapidUpload(context.Background(), fixtureCredential(), fixtureRapidUploadRequest()); err != nil {
 		t.Fatalf("two HTTP calls exhausted three tokens: %v", err)
 	}
-	if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrProviderRateLimited) {
-		t.Fatalf("follow-up search error = %v, want local rate limit after two tokens", err)
+	if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrDataPlaneQueueLimited) || errors.Is(err, ErrProviderRateLimited) {
+		t.Fatalf("follow-up search error = %v, want local queue limit after two tokens", err)
+	}
+}
+
+func TestCookieHTTPAdapterLocalQueueLimitDoesNotReach115(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"state":false}`))
+	}))
+	defer server.Close()
+	adapter := newTestCookieHTTPAdapter(t, server)
+	adapter.limiter = newAccountRateLimiter(DataPlaneLimitConfig{RPS: 2, Burst: 4, MaxWait: time.Millisecond})
+	now := time.Unix(1_700_000_000, 0).UTC()
+	adapter.limiter.now = func() time.Time { return now }
+	for i := 0; i < 4; i++ {
+		if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrProviderRejected) {
+			t.Fatalf("burst token %d error = %v", i, err)
+		}
+	}
+	if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrDataPlaneQueueLimited) || errors.Is(err, ErrProviderRateLimited) {
+		t.Fatalf("overflow error = %v, want local queue limit", err)
+	}
+	if calls.Load() != 4 {
+		t.Fatalf("local queue reject reached 115: calls=%d", calls.Load())
 	}
 }
 
@@ -224,11 +248,11 @@ func TestCookieHTTPAdapterPacesDataPlaneCallsPerAccount(t *testing.T) {
 	if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrProviderRejected) {
 		t.Fatalf("first search error = %v", err)
 	}
-	if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrProviderRateLimited) {
-		t.Fatalf("second search error = %v, want local rate limit", err)
+	if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrDataPlaneQueueLimited) || errors.Is(err, ErrProviderRateLimited) {
+		t.Fatalf("second search error = %v, want local queue limit", err)
 	}
 	if calls.Load() != 1 {
-		t.Fatalf("rate-limited call reached 115: calls=%d", calls.Load())
+		t.Fatalf("local queue reject reached 115: calls=%d", calls.Load())
 	}
 }
 

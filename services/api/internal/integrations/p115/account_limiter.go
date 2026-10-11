@@ -97,8 +97,8 @@ func (limiter *accountRateLimiter) currentTime() time.Time {
 }
 
 // waitDataPlane paces Cookie/Web API calls for one Provider UID. Missing or
-// disabled limiters do not invent a quota. Context cancellation stays the
-// caller's timeout, not a rate-limit health event.
+// disabled limiters do not invent a quota. Context cancellation and local
+// MaxWait overflow stay request-scoped and are not 429 health events.
 func (a *CookieHTTPAdapter) waitDataPlane(ctx context.Context, credential Credential) error {
 	if a == nil || a.limiter == nil {
 		return nil
@@ -111,8 +111,9 @@ func (a *CookieHTTPAdapter) waitDataPlane(ctx context.Context, credential Creden
 }
 
 // Wait reserves one token for the account key or fails closed when the wait
-// would exceed MaxWait. Canceled callers receive the context error and roll
-// back an unused delayed reservation so leftover queue cannot trip MaxWait.
+// would exceed MaxWait. Local queue overflow is ErrDataPlaneQueueLimited, not
+// an upstream 429. Canceled callers receive the context error and roll back
+// an unused delayed reservation so leftover queue cannot trip MaxWait.
 func (limiter *accountRateLimiter) Wait(ctx context.Context, accountKey string) error {
 	if limiter == nil || limiter.config.RPS <= 0 || strings.TrimSpace(accountKey) == "" {
 		return nil
@@ -171,7 +172,7 @@ func (limiter *accountRateLimiter) reserve(accountKey string) (dataPlaneReservat
 		wait = 0
 	}
 	if limiter.config.MaxWait > 0 && wait > limiter.config.MaxWait {
-		return dataPlaneReservation{}, ErrProviderRateLimited
+		return dataPlaneReservation{}, ErrDataPlaneQueueLimited
 	}
 	bucket.tokens = 0
 	bucket.last = next

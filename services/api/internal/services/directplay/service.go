@@ -1168,14 +1168,15 @@ func (service *Service) reportRuntimeHealthWithContext(
 	}
 }
 
-// runtimeHealthOutcome excludes cancellation and source-path rejection or
-// protocol errors from account-wide changes. Source credential and transport
-// failures still retain their existing expiry and cooldown behavior.
+// runtimeHealthOutcome excludes cancellation, local data-plane queue overflow,
+// and source-path rejection or protocol errors from account-wide changes.
+// Source credential and real upstream 429/403 still retain expiry/cooldown.
 func runtimeHealthOutcome(operation string, err error) (p115account.RuntimeHealthOutcome, bool) {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "", false
-	case errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, ErrSourceReadTimeout):
+	case errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, ErrSourceReadTimeout),
+		errors.Is(err, p115integration.ErrDataPlaneQueueLimited):
 		return "", false
 	case errors.Is(err, p115integration.ErrCredentialRejected):
 		return p115account.RuntimeHealthCredentialRejected, true
@@ -1362,7 +1363,8 @@ func mapProviderFailure(operation string, err error) error {
 		return withFailureContext(ErrAccountUnavailable, FailureContext{ProviderOperation: operation})
 	case errors.Is(err, p115integration.ErrProviderUnavailable),
 		errors.Is(err, p115integration.ErrProviderRateLimited),
-		errors.Is(err, p115integration.ErrProviderRiskControl):
+		errors.Is(err, p115integration.ErrProviderRiskControl),
+		errors.Is(err, p115integration.ErrDataPlaneQueueLimited):
 		return withFailureContext(ErrProviderUnavailable, FailureContext{ProviderOperation: operation})
 	case errors.Is(err, p115integration.ErrDownloadURLIncompatible):
 		return withFailureContext(ErrDownloadIncompatible, FailureContext{ProviderOperation: operation})
@@ -1383,6 +1385,8 @@ func providerFailureCode(err error) string {
 		return "provider_rate_limited"
 	case errors.Is(err, p115integration.ErrProviderRiskControl):
 		return "provider_risk_control"
+	case errors.Is(err, p115integration.ErrDataPlaneQueueLimited):
+		return "data_plane_queue_limited"
 	default:
 		return "provider_protocol"
 	}

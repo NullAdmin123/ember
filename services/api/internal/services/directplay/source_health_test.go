@@ -114,3 +114,26 @@ func TestRateLimitAndRiskControlStayAccountWideButNeverExpire(t *testing.T) {
 		t.Fatal("directory timeout must not write account health")
 	}
 }
+
+// TestLocalQueueLimitDoesNotWriteHealthOrShareRateLimitCode keeps MaxWait
+// overflow off the account cooldown path while still allowing Emby fallback.
+func TestLocalQueueLimitDoesNotWriteHealthOrShareRateLimitCode(t *testing.T) {
+	for _, operation := range []string{
+		failureOperationResolveSourcePath, failureOperationHashSourcePreID,
+		failureOperationRapidUpload, failureOperationGetDownloadURL,
+	} {
+		if _, ok := runtimeHealthOutcome(operation, p115.ErrDataPlaneQueueLimited); ok {
+			t.Fatalf("%s local queue overflow wrote account health", operation)
+		}
+		mapped := mapProviderFailure(operation, p115.ErrDataPlaneQueueLimited)
+		if !errors.Is(mapped, ErrProviderUnavailable) {
+			t.Fatalf("%s mapped=%v, want public unavailable fallback", operation, mapped)
+		}
+		if code := providerFailureCode(p115.ErrDataPlaneQueueLimited); code != "data_plane_queue_limited" {
+			t.Fatalf("failure code=%s, want data_plane_queue_limited", code)
+		}
+		if code := providerFailureCode(p115.ErrDataPlaneQueueLimited); code == "provider_rate_limited" {
+			t.Fatal("local queue overflow reused upstream 429 task code")
+		}
+	}
+}
