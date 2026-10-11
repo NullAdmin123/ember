@@ -345,7 +345,7 @@ Authorization: Bearer <account-access-token>
 - Provider 原始错误响应必须脱敏，禁止保存完整响应体。
 - 未确认的错误码不能写成稳定业务语义，必须保留原始错误码的脱敏映射能力。
 
-当前 Ember 内部实现把已经固定的 Provider sentinel 收口为四种账号级结果：成功、凭证失效、临时不可用和协议错误。临时不可用进入固定 1 分钟 `cooling_down`；冷却期间不读取 Cookie，到期后通过 PostgreSQL 行锁只放行一个半开探测。成功恢复 `active`，凭证失效进入 `expired + disabled`，协议错误进入 `error`。回写以 Cookie 密文和 `updated_at` 作为请求代际条件，旧请求不能覆盖新的凭证或账号状态；请求取消和文件级错误不进入账号健康。该行为已有 fake/race 与 PostgreSQL 集成证据，但真实 115 限流错误码、生产冷却时长和恢复行为仍未实机确认。
+当前 Ember 内部实现把已经固定的 Provider sentinel 收口为六种账号级结果：成功、凭证失效、临时不可用、限流、风控和协议错误。临时不可用进入固定 1 分钟 `cooling_down`；限流默认 15 秒、风控默认 30 秒，均只短暂冷却且不 `expired + disabled`。冷却期间不读取 Cookie，到期后通过 PostgreSQL 行锁只放行一个半开探测。成功恢复 `active`，凭证失效进入 `expired + disabled`，协议错误进入 `error`。回写以 Cookie 密文和 `updated_at` 作为请求代际条件，旧请求不能覆盖新的凭证或账号状态；请求取消、大目录解析超时和文件级错误不进入账号健康。数据面按账号限流与 429/403 映射已有 fake HTTP 证据，但真实 115 限流错误码、生产冷却时长和恢复行为仍未实机确认。
 
 ## 11. 测试与真实验证边界
 

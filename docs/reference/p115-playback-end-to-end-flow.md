@@ -227,7 +227,7 @@ stateDiagram-v2
 
 source 的路径解析及媒体身份校验成功，即构成真实源健康观察。后续目标查询、起播许可、配额或存储拒绝不应让 source 继续停在半开冷却；源健康在本次源调用结束后独立结算，若后续源 preID/challenge 明确凭证失效或 Provider 临时不可用则不报告成功；业务拒绝、Range 协议不匹配和无效 hash 按文件请求隔离，不把整个源账号置为 error，任务失败落库异常也不能掩盖源失败。继续使用原凭证快照 CAS，较新的故障、停用和 Cookie 替换不能被旧成功覆盖。playback 仍以真实下载接口成功作为恢复证据。
 
-DirectPlay 对源路径查询、每次 preID/challenge 源片段读取各设置 5 秒只读预算。超预算主动取消并以 `source_read_timeout` 回退，未开始的秒传不再执行；已开始的 retained 写入不受这一只读预算中断。主动取消本身不写账号故障；没有有效源身份时也不伪造恢复成功，既有半开探测租约保留原到期规则。该预算不限制 Emby 回退耗时，客户端实际起播仍需线上验证。
+DirectPlay 对源路径查询设置 30 秒只读预算，与 Adapter 目录 flight / 分页上限对齐；每次 preID/challenge 源片段读取仍是 5 秒。超预算主动取消并以 `source_read_timeout` 回退，大目录超时不写账号健康，未开始的秒传不再执行；已开始的 retained 写入不受这一只读预算中断。主动取消本身不写账号故障；没有有效源身份时也不伪造恢复成功，既有半开探测租约保留原到期规则。该预算不限制 Emby 回退耗时，客户端实际起播仍需线上验证。
 
 持续健康账号复用凭证读取快照，对 1 分钟内的干净成功跳过健康 SQL；错误、恢复和配置修改后的首次成功仍立即尝试条件写入。采样观察不会推进健康版本或清除新错误。保留文件复用的访问时间使用单条条件 UPDATE，先确定最近 succeeded 任务，再按 1 分钟窗口更新；旧请求不回退时间，窗口内及外部预存文件均允许零行更新。这两个时间是观察采样，不是逐次播放审计或活跃会话真相。
 
@@ -399,7 +399,7 @@ HLS/DASH manifest、转码分片、不完整参数、未映射路径、账号不
 
 ## 7. DirectPlay 保留式秒传
 
-源目录解析在 Cookie Adapter 内合并时间重叠的相同账号、精确凭证和父目录请求，多个文件共享一次路径解析与完整分页，再分别校验文件名唯一性。完成即移除，不缓存后续播放；等待者独立取消，全部离开取消上游，总预算 30 秒耗尽按 Provider unavailable 处理。该优化位于用户/账号/Redis 准入之后，不共享目标查重、转存记账或最终直链；详细隔离、日志及中间目录重名未验证边界见 [115 Cookie 合同](./p115-cookie-playback-contract.md#521-源文件路径解析)。
+源目录解析在 Cookie Adapter 内合并时间重叠的相同账号、精确凭证和父目录请求，多个文件共享一次路径解析与完整分页，再分别校验文件名唯一性。完成即移除，不缓存后续播放；等待者独立取消，全部离开取消上游，总预算 30 秒耗尽映射目录超时并以 `source_read_timeout` 回退，不回写账号健康。该优化位于用户/账号/Redis 准入之后，不共享目标查重、转存记账或最终直链；详细隔离、日志及中间目录重名未验证边界见 [115 Cookie 合同](./p115-cookie-playback-contract.md#521-源文件路径解析)。
 
 以下序列图描述媒体缓存未命中时的完整路径；媒体命中直接复用已验证结果并采样访问记录，跳过 Provider/transfer 步骤，再执行最终租约确认。
 
@@ -638,7 +638,7 @@ Debug 请求摘要记录有界 method/Host/原始 request path、query key、rou
 
 #### 【P2-1，已关闭】播放运行期已回写账号失效、冷却和成功状态
 
-- 关闭实现：`directplay.Service` 通过窄 `AccountHealthReporter` 只回传实际调用账号和四种固定结果；成功按 1 分钟采样更新 source/playback `lastSucceededAt`（首次及恢复立即写入），凭证失效进入 `expired + disabled`，临时不可用进入 1 分钟 `cooling_down`，协议错误进入 `error`。
+- 关闭实现：`directplay.Service` 通过窄 `AccountHealthReporter` 只回传实际调用账号和六种固定结果；成功按 1 分钟采样更新 source/playback `lastSucceededAt`（首次及恢复立即写入），凭证失效进入 `expired + disabled`，临时不可用进入 1 分钟 `cooling_down`，限流/风控分别短暂冷却，协议错误进入 `error`。
 - 并发边界：冷却期间不读取 Cookie；到期后 `AcquireRuntimeByRole` 在 PostgreSQL 行锁内续租并只放行一个半开探测。回写同时匹配 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的健康结果。
 - 失败边界：请求取消和文件级错误不改变账号状态；源路径解析的业务拒绝、响应协议异常和无效文件身份也属于请求级失败，不把源账号置为 `error`。明确凭证失效/临时不可用和其他 Provider 操作的健康处理保持原合同。健康回写使用独立 2 秒上限，失败不改写原始 302/fallback 结果。
 - 验证证据：Go 单元/race 与独立 PostgreSQL schema 已覆盖四类映射、冷却阻断、过期冷却并发单探测、成功恢复、凭证失效停用和旧 Cookie 结果丢弃；没有请求真实 115，生产自然故障的冷却时长仍待观察。

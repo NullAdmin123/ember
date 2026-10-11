@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	downloadCacheCapacity       = 1024
-	mediaResolutionFreshnessTTL = 10 * time.Minute
-	downloadCacheSafetyWindow   = 10 * time.Second
-	maxCachedDownloadURLBytes   = 16 * 1024
+	downloadCacheCapacity        = 1024
+	mediaResolutionFreshnessTTL  = 10 * time.Minute
+	downloadCacheMaxSafetyWindow = 5 * time.Minute
+	downloadCacheSafetyRatio     = 10
+	maxCachedDownloadURLBytes    = 16 * 1024
 )
 
 // downloadCacheScope deliberately excludes PlaySessionId: stopping playback
@@ -86,7 +87,7 @@ func (cache *downloadURLCache) getEntry(key string, now time.Time) (cachedDownlo
 		return cachedDownload{}, false
 	}
 	entry := element.Value.(cachedDownload)
-	if now.Before(entry.createdAt) || !now.Before(entry.expiresAt) {
+	if now.Before(entry.createdAt) || !now.Before(entry.expiresAt) || !allowedCachedDownloadHost(entry.result.URL) {
 		cache.lru.Remove(element)
 		delete(cache.entries, key)
 		return cachedDownload{}, false
@@ -98,12 +99,13 @@ func (cache *downloadURLCache) getEntry(key string, now time.Time) (cachedDownlo
 // put retains a URL until its provider expiry minus the safety window, never
 // extending that deadline on access. Capacity bounds memory independently.
 func (cache *downloadURLCache) put(key string, result p115.DownloadURLResult, now time.Time) {
-	deadline := result.ExpiresAt.Add(-downloadCacheSafetyWindow)
-	if cache.capacity <= 0 || len(result.URL) > maxCachedDownloadURLBytes || !deadline.After(now) {
+	deadline, ok := downloadCacheDeadline(result.ExpiresAt, now)
+	if cache.capacity <= 0 || len(result.URL) > maxCachedDownloadURLBytes || !ok {
 		return
 	}
 	parsed, err := url.Parse(result.URL)
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" ||
+		!p115.IsAllowedDownloadHost(strings.ToLower(parsed.Hostname())) {
 		return
 	}
 	cache.mu.Lock()
@@ -120,6 +122,32 @@ func (cache *downloadURLCache) put(key string, result p115.DownloadURLResult, no
 		cache.lru.Remove(oldest)
 	}
 	cache.entries[key] = cache.lru.PushFront(entry)
+}
+
+// downloadCacheDeadline keeps a minute-scale safety window without disabling
+// short-lived URLs. Safety is min(5m, 10% of remaining life) so a 10s link
+// still caches for 9s instead of being rejected by a fixed 10s cut.
+func downloadCacheDeadline(expiresAt, now time.Time) (time.Time, bool) {
+	remaining := expiresAt.Sub(now)
+	if remaining <= 0 {
+		return time.Time{}, false
+	}
+	safety := remaining / downloadCacheSafetyRatio
+	if safety > downloadCacheMaxSafetyWindow {
+		safety = downloadCacheMaxSafetyWindow
+	}
+	deadline := expiresAt.Add(-safety)
+	return deadline, deadline.After(now)
+}
+
+// allowedCachedDownloadHost re-checks the existing 115 hostname allowlist on
+// cache hits. It does not widen the Provider boundary.
+func allowedCachedDownloadHost(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return p115.IsAllowedDownloadHost(strings.ToLower(parsed.Hostname()))
 }
 
 // remove discards a previously signed URL when fresh lookup required a new

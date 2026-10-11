@@ -11,7 +11,9 @@ import (
 	"github.com/konghang/ember/backend/internal/logging"
 )
 
-const sourceDirectoryResolveTimeout = 30 * time.Second
+// SourceDirectoryResolveTimeout is the shared parent-resolve plus full-page
+// listing budget. DirectPlay must give ResolveFileByPath at least this long.
+const SourceDirectoryResolveTimeout = 30 * time.Second
 
 type sourceReadTimingKey struct{}
 type sourceReadTiming struct {
@@ -61,7 +63,7 @@ func (group *sourceDirectoryFlights) do(ctx context.Context, key [sha256.Size]by
 		}
 		budget := group.timeout
 		if budget <= 0 {
-			budget = sourceDirectoryResolveTimeout
+			budget = SourceDirectoryResolveTimeout
 		}
 		sharedCtx, cancel := context.WithTimeout(context.Background(), budget)
 		call = &sourceDirectoryFlight{done: make(chan struct{}), cancel: cancel}
@@ -102,9 +104,8 @@ func (group *sourceDirectoryFlights) run(ctx context.Context, key [sha256.Size]b
 	ctx = context.WithValue(ctx, sourceReadTimingKey{}, readTiming)
 	entries, err := resolve(ctx)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		// The shared Provider budget is not an individual client's deadline:
-		// preserve ordinary Provider-unavailable fallback and health handling.
-		err = ErrProviderUnavailable
+		// Shared listing budget is a local acceleration limit, not a 115 outage.
+		err = ErrSourceDirectoryTimeout
 	} else if ctx.Err() != nil {
 		err = ctx.Err()
 	}

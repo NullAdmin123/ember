@@ -52,3 +52,35 @@ func TestSourceReadBudgetFallsBackWithoutAccountFailure(t *testing.T) {
 		t.Fatal("caller cancellation lost")
 	}
 }
+
+// TestSourceReadBudgetsAlignWithDirectoryFlight locks the production path
+// budget to the shared 30s listing flight while range reads stay at 5s.
+func TestSourceReadBudgetsAlignWithDirectoryFlight(t *testing.T) {
+	service := &Service{}
+	if service.sourcePathResolveLimit() != p115.SourceDirectoryResolveTimeout {
+		t.Fatalf("path budget=%s, want %s", service.sourcePathResolveLimit(), p115.SourceDirectoryResolveTimeout)
+	}
+	if service.sourceRangeReadLimit() != sourceReadTimeout {
+		t.Fatalf("range budget=%s, want %s", service.sourceRangeReadLimit(), sourceReadTimeout)
+	}
+	service.sourceReadBudget = time.Millisecond
+	if service.sourcePathResolveLimit() != time.Millisecond || service.sourceRangeReadLimit() != time.Millisecond {
+		t.Fatal("test seam must still shorten both budgets")
+	}
+}
+
+// TestSourceDirectoryTimeoutDoesNotWriteAccountHealth treats a large-directory
+// resolve budget as a local fallback, not an account-wide 115 outage.
+func TestSourceDirectoryTimeoutDoesNotWriteAccountHealth(t *testing.T) {
+	health := &fakeAccountHealthReporter{}
+	provider := newFakeProvider()
+	provider.resolveErr = p115.ErrSourceDirectoryTimeout
+	service := newServiceWithDependencies(fakeAccountLoader{health: health}, provider, &fakeTaskStore{}, &fakeTaskLocker{})
+	_, err := service.Resolve(context.Background(), fixtureResolveRequest())
+	if !errors.Is(err, ErrSourceReadTimeout) {
+		t.Fatalf("error=%v, want ErrSourceReadTimeout", err)
+	}
+	if len(health.events) != 0 {
+		t.Fatalf("directory timeout wrote health: %+v", health.events)
+	}
+}

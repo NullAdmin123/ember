@@ -81,3 +81,36 @@ func TestSourceRangeHealthClassification(t *testing.T) {
 		}
 	}
 }
+
+// TestRateLimitAndRiskControlStayAccountWideButNeverExpire covers data-plane
+// 429/403 mapping: brief cooling, never expired+disabled, including source path.
+func TestRateLimitAndRiskControlStayAccountWideButNeverExpire(t *testing.T) {
+	tests := []struct {
+		err     error
+		outcome p115account.RuntimeHealthOutcome
+	}{
+		{p115.ErrProviderRateLimited, p115account.RuntimeHealthProviderRateLimited},
+		{p115.ErrProviderRiskControl, p115account.RuntimeHealthProviderRiskControl},
+	}
+	for _, operation := range []string{
+		failureOperationResolveSourcePath, failureOperationHashSourcePreID,
+		failureOperationRapidUpload, failureOperationGetDownloadURL,
+	} {
+		for _, test := range tests {
+			outcome, ok := runtimeHealthOutcome(operation, test.err)
+			if !ok || outcome != test.outcome {
+				t.Fatalf("%s %v outcome=%s ok=%t", operation, test.err, outcome, ok)
+			}
+			mapped := mapProviderFailure(operation, test.err)
+			if !errors.Is(mapped, ErrProviderUnavailable) {
+				t.Fatalf("%s mapped=%v, want public unavailable fallback", operation, mapped)
+			}
+			if code := providerFailureCode(test.err); code != string(test.outcome) {
+				t.Fatalf("failure code=%s, want %s", code, test.outcome)
+			}
+		}
+	}
+	if _, ok := runtimeHealthOutcome(failureOperationResolveSourcePath, p115.ErrSourceDirectoryTimeout); ok {
+		t.Fatal("directory timeout must not write account health")
+	}
+}

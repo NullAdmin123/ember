@@ -14,6 +14,8 @@ import (
 const (
 	validationCodeRejected    = "credential_rejected"
 	validationCodeUnavailable = "provider_unavailable"
+	validationCodeRateLimited = "provider_rate_limited"
+	validationCodeRiskControl = "provider_risk_control"
 	validationCodeProtocol    = "provider_protocol_error"
 )
 

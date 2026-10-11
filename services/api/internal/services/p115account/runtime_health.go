@@ -3,12 +3,18 @@ package p115account
 import (
 	"context"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/konghang/ember/backend/internal/models"
 )
 
-const runtimeProviderCooldown = time.Minute
+const (
+	runtimeProviderCooldown    = time.Minute
+	defaultRateLimitCooldown   = 15 * time.Second
+	defaultRiskControlCooldown = 30 * time.Second
+)
 
 // runtimeSuccessInterval bounds observation writes without delaying failures or recovery.
 const runtimeSuccessInterval = time.Minute
@@ -21,6 +27,8 @@ const (
 	RuntimeHealthSucceeded           RuntimeHealthOutcome = "succeeded"
 	RuntimeHealthCredentialRejected  RuntimeHealthOutcome = "credential_rejected"
 	RuntimeHealthProviderUnavailable RuntimeHealthOutcome = "provider_unavailable"
+	RuntimeHealthProviderRateLimited RuntimeHealthOutcome = "provider_rate_limited"
+	RuntimeHealthProviderRiskControl RuntimeHealthOutcome = "provider_risk_control"
 	RuntimeHealthProviderProtocol    RuntimeHealthOutcome = "provider_protocol"
 )
 
@@ -105,6 +113,18 @@ func buildRuntimeHealthMutation(outcome RuntimeHealthOutcome, now time.Time) (ru
 		mutation.CooldownUntil = &cooldownUntil
 		mutation.Code = validationCodeUnavailable
 		mutation.Message = "115 服务暂不可用"
+	case RuntimeHealthProviderRateLimited:
+		mutation.Status = models.P115AccountStatusCoolingDown
+		cooldownUntil := now.Add(rateLimitCooldown())
+		mutation.CooldownUntil = &cooldownUntil
+		mutation.Code = validationCodeRateLimited
+		mutation.Message = "115 接口限流"
+	case RuntimeHealthProviderRiskControl:
+		mutation.Status = models.P115AccountStatusCoolingDown
+		cooldownUntil := now.Add(riskControlCooldown())
+		mutation.CooldownUntil = &cooldownUntil
+		mutation.Code = validationCodeRiskControl
+		mutation.Message = "115 账号风控"
 	case RuntimeHealthProviderProtocol:
 		mutation.Status = models.P115AccountStatusError
 		mutation.Code = validationCodeProtocol
@@ -113,4 +133,28 @@ func buildRuntimeHealthMutation(outcome RuntimeHealthOutcome, now time.Time) (ru
 		return runtimeHealthMutation{}, ErrRuntimeHealthOutcomeInvalid
 	}
 	return mutation, nil
+}
+
+// rateLimitCooldown is the brief shared pause after a 115 429.
+func rateLimitCooldown() time.Duration {
+	return durationFromEnv("P115_RATE_LIMIT_COOLDOWN", defaultRateLimitCooldown)
+}
+
+// riskControlCooldown is the brief shared pause after a 115 API 403.
+func riskControlCooldown() time.Duration {
+	return durationFromEnv("P115_RISK_CONTROL_COOLDOWN", defaultRiskControlCooldown)
+}
+
+// durationFromEnv reads a positive duration override; invalid values keep the
+// conservative default instead of disabling cooling.
+func durationFromEnv(name string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }

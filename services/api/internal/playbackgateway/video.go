@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	p115 "github.com/konghang/ember/backend/internal/integrations/p115"
 	"github.com/konghang/ember/backend/internal/services/directplay"
 	"github.com/konghang/ember/backend/internal/services/embytoken"
 )
@@ -466,12 +467,15 @@ func singleBoundedQueryValue(values url.Values, key string, maxBytes int) (strin
 // validRedirectCandidate applies a final transport-level sanity check to the
 // already policy-validated internal DirectPlay result.
 func validRedirectCandidate(candidate directplay.RedirectCandidate) bool {
-	if !candidate.ExpiresAt.After(time.Now().UTC()) || candidate.ConcurrentOpenLimit <= 0 ||
+	if !candidate.ExpiresAt.After(time.Now().UTC()) || candidate.ConcurrentOpenLimit < 0 ||
 		candidate.URL == "" || strings.ContainsAny(candidate.URL, "\r\n") {
 		return false
 	}
 	location, err := url.Parse(candidate.URL)
-	return err == nil && location.Scheme == "https" && location.Host != "" && location.User == nil && location.Fragment == ""
+	if err != nil || location.Scheme != "https" || location.Host == "" || location.User != nil || location.Fragment != "" {
+		return false
+	}
+	return p115.IsAllowedDownloadHost(strings.ToLower(location.Hostname()))
 }
 
 // directPlayReasonCode maps every public DirectPlay error class to the fixed

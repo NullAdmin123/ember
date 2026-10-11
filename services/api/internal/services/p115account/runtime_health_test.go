@@ -122,11 +122,13 @@ func TestServiceReportRuntimeHealthBuildsSafeStateMutation(t *testing.T) {
 		wantSuccess  bool
 		wantCode     string
 		wantMessage  string
-		wantCooldown bool
+		wantCooldown time.Duration
 	}{
 		{name: "success", outcome: RuntimeHealthSucceeded, wantStatus: models.P115AccountStatusActive, wantSuccess: true},
 		{name: "credential rejected", outcome: RuntimeHealthCredentialRejected, wantStatus: models.P115AccountStatusExpired, wantDisable: true, wantCode: "credential_rejected", wantMessage: "115 Cookie 已失效"},
-		{name: "provider unavailable", outcome: RuntimeHealthProviderUnavailable, wantStatus: models.P115AccountStatusCoolingDown, wantCode: "provider_unavailable", wantMessage: "115 服务暂不可用", wantCooldown: true},
+		{name: "provider unavailable", outcome: RuntimeHealthProviderUnavailable, wantStatus: models.P115AccountStatusCoolingDown, wantCode: "provider_unavailable", wantMessage: "115 服务暂不可用", wantCooldown: runtimeProviderCooldown},
+		{name: "provider rate limited", outcome: RuntimeHealthProviderRateLimited, wantStatus: models.P115AccountStatusCoolingDown, wantCode: "provider_rate_limited", wantMessage: "115 接口限流", wantCooldown: defaultRateLimitCooldown},
+		{name: "provider risk control", outcome: RuntimeHealthProviderRiskControl, wantStatus: models.P115AccountStatusCoolingDown, wantCode: "provider_risk_control", wantMessage: "115 账号风控", wantCooldown: defaultRiskControlCooldown},
 		{name: "provider protocol", outcome: RuntimeHealthProviderProtocol, wantStatus: models.P115AccountStatusError, wantCode: "provider_protocol_error", wantMessage: "115 响应格式不兼容"},
 	}
 	for _, tt := range tests {
@@ -144,9 +146,9 @@ func TestServiceReportRuntimeHealthBuildsSafeStateMutation(t *testing.T) {
 				!mutation.At.Equal(now) {
 				t.Fatalf("mutation = %+v", mutation)
 			}
-			if tt.wantCooldown {
-				if mutation.CooldownUntil == nil || !mutation.CooldownUntil.Equal(now.Add(runtimeProviderCooldown)) {
-					t.Fatalf("cooldownUntil = %v", mutation.CooldownUntil)
+			if tt.wantCooldown > 0 {
+				if mutation.CooldownUntil == nil || !mutation.CooldownUntil.Equal(now.Add(tt.wantCooldown)) || mutation.Disable {
+					t.Fatalf("cooldownUntil = %v disable=%t", mutation.CooldownUntil, mutation.Disable)
 				}
 			} else if mutation.CooldownUntil != nil {
 				t.Fatalf("unexpected cooldownUntil = %v", mutation.CooldownUntil)

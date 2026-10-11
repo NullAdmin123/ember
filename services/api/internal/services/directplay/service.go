@@ -685,7 +685,7 @@ func (service *Service) resolveWithAccounts(
 ) (candidate RedirectCandidate, resolveErr error) {
 	finishPreparation(ctx)
 	finishSource := measureStage(ctx, "sourceResolve")
-	readCtx, cancelRead := context.WithTimeout(ctx, service.sourceReadLimit())
+	readCtx, cancelRead := context.WithTimeout(ctx, service.sourcePathResolveLimit())
 	sourceFile, err := service.provider.ResolveFileByPath(readCtx, source.Credential, request.SourceFile)
 	err = sourceReadResult(ctx, readCtx, err)
 	cancelRead()
@@ -871,7 +871,7 @@ func (service *Service) resolveUnderLock(
 	}
 	preIDRange := boundedRange(sourceFile.Size)
 	finishPreID := measureStage(ctx, "preID")
-	readCtx, cancelRead := context.WithTimeout(ctx, service.sourceReadLimit())
+	readCtx, cancelRead := context.WithTimeout(ctx, service.sourceRangeReadLimit())
 	preIDHash, err := service.provider.HashFileRange(readCtx, source.Credential, p115integration.FileRangeRequest{
 		File: sourceFile, Range: preIDRange,
 	})
@@ -905,7 +905,7 @@ func (service *Service) resolveUnderLock(
 			return p115integration.File{}, "", false, err
 		}
 		finishChallenge := measureStage(ctx, "challenge")
-		readCtx, cancelRead := context.WithTimeout(ctx, service.sourceReadLimit())
+		readCtx, cancelRead := context.WithTimeout(ctx, service.sourceRangeReadLimit())
 		challengeHash, hashErr := service.provider.HashFileRange(readCtx, source.Credential, p115integration.FileRangeRequest{
 			File: sourceFile, Range: result.Challenge.Range,
 		})
@@ -1090,7 +1090,7 @@ func (service *Service) fetchDownloadCandidate(
 	if err != nil {
 		return RedirectCandidate{}, service.reportProviderFailure(ctx, account, failureOperationGetDownloadURL, err)
 	}
-	if download.URL == "" || !download.ExpiresAt.After(service.now().UTC()) || download.ConcurrentOpenLimit <= 0 {
+	if download.URL == "" || !download.ExpiresAt.After(service.now().UTC()) || download.ConcurrentOpenLimit < 0 {
 		service.reportRuntimeHealth(account, p115account.RuntimeHealthProviderProtocol)
 		return RedirectCandidate{}, ErrProviderProtocol
 	}
@@ -1175,10 +1175,16 @@ func runtimeHealthOutcome(operation string, err error) (p115account.RuntimeHealt
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "", false
+	case errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, ErrSourceReadTimeout):
+		return "", false
 	case errors.Is(err, p115integration.ErrCredentialRejected):
 		return p115account.RuntimeHealthCredentialRejected, true
 	case errors.Is(err, p115integration.ErrProviderUnavailable):
 		return p115account.RuntimeHealthProviderUnavailable, true
+	case errors.Is(err, p115integration.ErrProviderRateLimited):
+		return p115account.RuntimeHealthProviderRateLimited, true
+	case errors.Is(err, p115integration.ErrProviderRiskControl):
+		return p115account.RuntimeHealthProviderRiskControl, true
 	case errors.Is(err, p115integration.ErrProviderRejected), errors.Is(err, p115integration.ErrProviderProtocol):
 		if operation == failureOperationResolveSourcePath || operation == failureOperationHashSourcePreID || operation == failureOperationHashSourceChallenge {
 			return "", false
@@ -1350,11 +1356,13 @@ func mapProviderFailure(operation string, err error) error {
 		return err
 	}
 	switch {
-	case errors.Is(err, ErrSourceReadTimeout):
+	case errors.Is(err, ErrSourceReadTimeout), errors.Is(err, p115integration.ErrSourceDirectoryTimeout):
 		return withFailureContext(ErrSourceReadTimeout, FailureContext{ProviderOperation: operation})
 	case errors.Is(err, p115integration.ErrCredentialRejected):
 		return withFailureContext(ErrAccountUnavailable, FailureContext{ProviderOperation: operation})
-	case errors.Is(err, p115integration.ErrProviderUnavailable):
+	case errors.Is(err, p115integration.ErrProviderUnavailable),
+		errors.Is(err, p115integration.ErrProviderRateLimited),
+		errors.Is(err, p115integration.ErrProviderRiskControl):
 		return withFailureContext(ErrProviderUnavailable, FailureContext{ProviderOperation: operation})
 	case errors.Is(err, p115integration.ErrDownloadURLIncompatible):
 		return withFailureContext(ErrDownloadIncompatible, FailureContext{ProviderOperation: operation})
@@ -1371,6 +1379,10 @@ func providerFailureCode(err error) string {
 		return "credential_rejected"
 	case errors.Is(err, p115integration.ErrProviderUnavailable):
 		return "provider_unavailable"
+	case errors.Is(err, p115integration.ErrProviderRateLimited):
+		return "provider_rate_limited"
+	case errors.Is(err, p115integration.ErrProviderRiskControl):
+		return "provider_risk_control"
 	default:
 		return "provider_protocol"
 	}

@@ -97,6 +97,9 @@ func TestAllowed115DownloadHostKeeps115CDNNetBoundaryExact(t *testing.T) {
 		if got := isAllowed115DownloadHost(hostname); got != want {
 			t.Fatalf("isAllowed115DownloadHost(%q) = %t, want %t", hostname, got, want)
 		}
+		if got := IsAllowedDownloadHost(hostname); got != want {
+			t.Fatalf("IsAllowedDownloadHost(%q) = %t, want %t", hostname, got, want)
+		}
 	}
 }
 
@@ -216,6 +219,8 @@ func TestCookieHTTPAdapterGetDownloadURLMapsSafeProviderFailures(t *testing.T) {
 		wantErr    error
 	}{
 		{name: "http status", statusCode: http.StatusServiceUnavailable, body: "cookie-secret", wantErr: ErrProviderUnavailable},
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, body: "cookie-secret", wantErr: ErrProviderRateLimited},
+		{name: "risk control", statusCode: http.StatusForbidden, body: "cookie-secret", wantErr: ErrProviderRiskControl},
 		{name: "invalid outer json", statusCode: http.StatusOK, body: `{"state":`, wantErr: ErrProviderProtocol},
 		{name: "provider rejected", statusCode: http.StatusOK, body: `{"state":false,"error":"cookie-secret"}`, wantErr: ErrProviderRejected},
 		{name: "missing data", statusCode: http.StatusOK, body: `{"state":true}`, wantErr: ErrProviderProtocol},

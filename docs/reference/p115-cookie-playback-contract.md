@@ -192,7 +192,7 @@ Emby `PlaybackInfo` 提供媒体源 `Path` 和可能缺失或不可靠的 `Size`
 
 - 同一个 Cookie Adapter 内，相同账号 ID、精确 Cookie、AppType、Provider UA、规范化 root ID 和相对父目录共享正在进行的“父目录解析 + 完整分页”；不同文件名各自做唯一性匹配，根目录文件也共享目录读取。合并键使用长度分隔字段的 SHA256 摘要，不保存明文 Cookie，也不输出摘要。
 - 只合并时间重叠的调用；成功或失败完成后立即移除，不缓存完整文件身份或目录快照，不跨进程共享。顺序播放、下一集或后续重试仍重新访问 Provider；每个调用者返回独立 File 值。
-- 每个等待者独立响应取消或 deadline；最后一个等待者离开时取消上游请求并移除任务。旧任务稍后结束不能删除同键的新任务。共享读取从创建起固定最多 `30s`，包含父目录解析与全部分页；这个 Provider 预算耗尽映射 `ErrProviderUnavailable`，不冒充客户端 deadline。每个 HTTP 请求仍使用既有 `10s` 上限。
+- 每个等待者独立响应取消或 deadline；最后一个等待者离开时取消上游请求并移除任务。旧任务稍后结束不能删除同键的新任务。共享读取从创建起固定最多 `30s`，包含父目录解析与全部分页；DirectPlay 必须给 `ResolveFileByPath` 同样的 30s 预算。该预算耗尽映射 `ErrSourceDirectoryTimeout`，Gateway 按 `source_read_timeout` 回退 Emby，不回写账号健康，也不冒充客户端 deadline 或 Provider 宕机。每个 HTTP 请求仍使用既有 `10s` 上限。
 - 用户资格、账号健康、租约/转存配额和最终下载 URL 不在共享范围内；仍由各自调用链检查。Debug 每次共享读取结束只记录一条 `source_directory_resolved`，包含 shared、callers、entries、parentResolveMs、listMs、listPages、durationMs、success；listPages 统计实际尝试页数（含失败页），不记录凭证、路径、Provider ID、摘要或响应体。DirectPlay 各调用者另在 Gateway 最终决策日志携带自身等待源解析及后续各阶段的耗时，不把共享工作时间重复累加。
 - **中间目录重名仍未收口**：路径接口只返回一个 ID，现有证据不能证明其会拒绝同名中间目录；最终文件唯一性不等于完整路径唯一性。并发合并不恢复旧逐层歧义检查。后续必须用固定协议证据或明确授权的只读验证确认；若不能保证唯一性，再单独评估逐层校验的请求成本。目标账号的非零 `parent_id`、不存在目录、重名目录和真实耗时仍未证实。
 
@@ -490,7 +490,7 @@ playbackAccountId + SHA1 + size
 - 获取最终直链时使用真实客户端 User-Agent；直链缓存至少按 `accountId + pickCode + UA` 隔离。
 - 只有实测证明存在 IP 绑定后，才把客户端 IP 纳入缓存键；不得凭经验增加。
 - 缓存有效期不得超过链接参数 `t`，并预留安全窗口。
-- `Location` 必须匹配配置的 115/CDN 域名 allowlist，禁止开放重定向。
+- `Location` 必须匹配配置的 115/CDN 域名 allowlist，禁止开放重定向。Gateway 最终 302 与直链缓存命中复用 `IsAllowedDownloadHost` 同一边界，不放宽 `*.115cdn.net`。
 - 源账号用于 Range challenge 的直链永远不能返回给客户端。
 - `f=3` 或其他需要额外 Cookie 的链接，在证明 Infuse 能自然满足前按不兼容处理。
 - 不兼容、凭证失效或 Provider 不可用时向 Gateway 返回类型化内部错误，禁止改用 source 账号；Gateway 不签发 302，记录脱敏 fallback 原因并透明转发原始 Emby 视频请求。
@@ -501,7 +501,7 @@ playbackAccountId + SHA1 + size
 - 媒体键对 Server、用户、登录映射、设备、原始媒体路径、真实播放器 UA、源和 playback 账号 ID/Provider 身份/干净 active 配置版本/精确凭证/Provider 参数、源挂载前缀/root 和目标目录做长度编码摘要；不含 PlaySessionId，也不按会话过期或 Stopped 清除。媒体条目仅保存源内容 SHA1/size、原播放会话身份和直链缓存引用，最多 1024 条，容量满时淘汰最早到期项。
 - 跨会话媒体新鲜度截止于 `min(本次文件解析开始时间 + 10m, 引用直链缓存的原始截止时间)`；条目最多保留至引用直链原期限。超过新鲜度后，仅实时租约准入确认 active/paused、且 PlaySessionId 与该条目原会话一致时允许继续复用；其他会话、reservation、过期或停止会话必须重新验证文件身份。直链过期或被淘汰同样视为未命中；时钟回退丢弃条目。持续播放允许保留当前已验证文件身份至链接安全截止时间，跨会话仍最多延迟 10 分钟发现外部同路径替换/删除。不得用媒体重新填充延长原直链期限；媒体内容身份只在进程内使用，不输出日志或落库。
 - 缓存键对 Server、用户、登录映射、设备、playback 账号 ID/干净 active 配置版本、凭证及 Provider 参数、目标目录/文件 ID/pickCode/SHA1/size、真实播放器 UA 做长度编码后摘要；不保存原始 Cookie，不含 `PlaySessionId`，不跨设备或登录复用。摘要只在进程内使用，不输出日志。
-- 进程内 LRU 最多 1024 条，每条 URL 最多 16 KiB；缓存截至 `ExpiresAt - 10s`，不再附加获取后 10 分钟上限，命中不续期，过期惰性删除并按容量淘汰，无后台刷新。时钟回退到写入之前时丢弃条目。URL 不进入 Redis、数据库、API 或日志。
+- 进程内 LRU 最多 1024 条，每条 URL 最多 16 KiB；缓存截至 `ExpiresAt - min(5m, 剩余寿命 10%)`，不再附加获取后 10 分钟上限，也不再用固定 10s 窗口把短寿命链接整段禁用。命中不续期，过期惰性删除并按容量淘汰，无后台刷新。写入与命中都复用既有 115 hostname allowlist，不放宽。时钟回退到写入之前时丢弃条目。URL 不进入 Redis、数据库、API 或日志。
 - 同一键的取链串行，等待者可独立取消；持有者取消或调用失败不填缓存，后续请求可重新获取。不缓存错误、额外 Cookie 链接、无效结果或已进入安全窗口的地址，不以过期地址兜底。
 - 每个请求独立执行 Redis 准入和最终确认；HEAD 无租约仍 fallback，缓存不能绕过停用、冷却、解绑或配额状态。相同用户/登录/设备/媒体路径/UA 的昂贵处理跨 session 串行，获锁后加载账号快照，等待者独立取消。只有完整成功且最终租约确认通过后才发布媒体条目；新转存强制清除旧直链并重新获取。媒体命中返回 `preexisting=true`，不复制旧任务 ID、首次创建标记或转存用量；仍调用既有成功访问采样，不再次消耗转存额度。
 - 账号凭证加载暴露非持久化 `DownloadCacheVersion`：仅干净 active 状态为正数；任一账号冷却探测/错误恢复或未知版本为零时绕过媒体缓存，执行真实文件查询。playback 探测同时绕过直链缓存并实际取链。媒体命中不回写任一账号健康成功；只命中直链缓存时，真实源解析成功仍按原规则采样。
@@ -516,9 +516,11 @@ playbackAccountId + SHA1 + size
 - 第一阶段不承诺自动控制 playback 容量，管理员通过专用目录观察占用并手工处理；手工处理不属于 Ember 自动状态流转。
 - 第二阶段才设计自动回收。候选至少同时满足：无活跃会话、超过基于 `lastAccessedAt` 的最短保留期、容量策略要求回收、任务 provenance 完整、删除前 parent/fileId/SHA1/size 全量复核一致。
 - 第二阶段清理任务按账号串行执行，并补跨副本任务所有权/互斥；不能把 Adapter 进程内锁当成全局锁。
-- DirectPlay 当前只将 `succeeded/credential_rejected/provider_unavailable/provider_protocol` 四种固定账号级结果回写到实际调用的 source/playback 账号；Provider 原始错误和响应体不进入账号 Service。
+- DirectPlay 当前将 `succeeded/credential_rejected/provider_unavailable/provider_rate_limited/provider_risk_control/provider_protocol` 六种固定账号级结果回写到实际调用的 source/playback 账号；Provider 原始错误和响应体不进入账号 Service。
 - `provider_unavailable` 当前按账号进入固定 1 分钟共享冷却，不让每个播放请求独立重试；冷却未到期时不读取 Cookie，到期后用 PostgreSQL 行锁续租并只放行一个半开探测，成功立即恢复 `active`，失败重新冷却。
-- `credential_rejected` 进入 `expired + disabled`，`provider_protocol` 进入 `error`；请求取消、目标文件不可见、下载 Header 不兼容等文件/请求级失败不污染账号健康。
+- `provider_rate_limited` 默认冷却 15 秒，`provider_risk_control` 默认冷却 30 秒，均保留启用意图，不进入 `expired + disabled`。冷却时长可通过 `P115_RATE_LIMIT_COOLDOWN` / `P115_RISK_CONTROL_COOLDOWN` 覆盖。
+- Cookie/Web 数据面按账号做本地令牌桶限流；115 API `429` 与本地等待超过 `MaxWait` 使用 `ErrProviderRateLimited`，API `403` 使用 `ErrProviderRiskControl`。CDN Range 读取不套用该 HTTP 映射。对外仍按 Provider 不可用回退 Emby，不改变播放器可见行为。
+- `credential_rejected` 进入 `expired + disabled`，`provider_protocol` 进入 `error`；请求取消、大目录解析超时、目标文件不可见、下载 Header 不兼容等文件/请求级失败不污染账号健康。
 - 运行期回写同时匹配请求加载时的 Cookie 密文和 `updated_at`；旧请求不能覆盖 Cookie 替换、显式验证、手工启停或较新的运行期结果。健康回写失败不改变原始 302/fallback 结果。
 - Cookie 失效、账号风控、下载地址不兼容、普通上传要求和 Provider 限流必须使用不同内部错误码。
 - 负缓存只能短期存在；一次搜索失败不能长期证明文件不存在。

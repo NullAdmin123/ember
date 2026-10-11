@@ -84,8 +84,12 @@ func TestMediaCacheFixedDeadline(t *testing.T) {
 			}
 			p.resolveErr = p115.ErrSourceFileNotFound
 			window := 10 * time.Minute
-			if lifetime-downloadCacheSafetyWindow < window {
-				window = lifetime - downloadCacheSafetyWindow
+			safety := lifetime / 10
+			if safety > 5*time.Minute {
+				safety = 5 * time.Minute
+			}
+			if lifetime-safety < window {
+				window = lifetime - safety
 			}
 			now = now.Add(window - time.Nanosecond)
 			r.PlaySessionID = "second"
@@ -119,7 +123,8 @@ func TestMediaCacheKeepsOriginalURLDeadline(t *testing.T) {
 	a := &fakeRoutedAccountRuntime{}
 	s := newRoutedDirectPlayForTest(t, a, p, p115quota.NewMemoryLeaseStore())
 	now := s.now()
-	p.download.ExpiresAt = now.Add(10*time.Minute + downloadCacheSafetyWindow)
+	lifetime := 15 * time.Minute
+	p.download.ExpiresAt = now.Add(lifetime)
 	s.now = func() time.Time { return now }
 	r := routedMediaPathRequest("GET", "session")
 	if _, err := s.ResolveMediaPath(context.Background(), r); err != nil {
@@ -130,7 +135,11 @@ func TestMediaCacheKeepsOriginalURLDeadline(t *testing.T) {
 	if _, err := s.ResolveMediaPath(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(10*time.Minute - 5*time.Second)
+	safety := lifetime / 10
+	if safety > 5*time.Minute {
+		safety = 5 * time.Minute
+	}
+	now = now.Add(lifetime - safety - 5*time.Second)
 	result, err := s.ResolveMediaPath(context.Background(), r)
 	if err != nil || strings.Contains(strings.Join(result.Timing.LogFields(), " "), "mediaResolutionCache=hit") || countDownloadCalls(p) != 2 {
 		t.Fatalf("original deadline lost: err=%v downloads=%d", err, countDownloadCalls(p))
