@@ -123,6 +123,8 @@ func (limiter *accountRateLimiter) Wait(ctx context.Context, accountKey string) 
 }
 
 // reserve deducts one token or reports how long the caller must wait.
+// Future reservations accumulate from max(now, last) so concurrent waiters
+// are spaced at 1/RPS and MaxWait applies to the caller's total delay.
 func (limiter *accountRateLimiter) reserve(accountKey string) (time.Duration, error) {
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
@@ -135,24 +137,29 @@ func (limiter *accountRateLimiter) reserve(accountKey string) (time.Duration, er
 		bucket = &tokenBucket{tokens: float64(limiter.config.Burst), last: now}
 		limiter.buckets[accountKey] = bucket
 	}
-	elapsed := now.Sub(bucket.last)
-	if elapsed > 0 {
-		bucket.tokens += elapsed.Seconds() * limiter.config.RPS
+	cursor := bucket.last
+	if now.After(cursor) {
+		bucket.tokens += now.Sub(cursor).Seconds() * limiter.config.RPS
 		if bucket.tokens > float64(limiter.config.Burst) {
 			bucket.tokens = float64(limiter.config.Burst)
 		}
-		bucket.last = now
+		cursor = now
 	}
 	if bucket.tokens >= 1 {
 		bucket.tokens--
+		bucket.last = cursor
 		return 0, nil
 	}
 	needed := (1 - bucket.tokens) / limiter.config.RPS
-	wait := time.Duration(needed * float64(time.Second))
+	next := cursor.Add(time.Duration(needed * float64(time.Second)))
+	wait := next.Sub(now)
+	if wait < 0 {
+		wait = 0
+	}
 	if limiter.config.MaxWait > 0 && wait > limiter.config.MaxWait {
 		return 0, ErrProviderRateLimited
 	}
 	bucket.tokens = 0
-	bucket.last = now.Add(wait)
+	bucket.last = next
 	return wait, nil
 }

@@ -67,6 +67,27 @@ func TestAccountRateLimiterCanceledWaitDoesNotBecomeRateLimit(t *testing.T) {
 	}
 }
 
+func TestAccountRateLimiterStaggersConcurrentReservationsAndEnforcesMaxWait(t *testing.T) {
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
+	now := time.Unix(1_700_000_000, 0).UTC()
+	limiter.now = func() time.Time { return now }
+	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
+		t.Fatalf("burst token: %v", err)
+	}
+
+	first, err := limiter.reserve("uid-1")
+	if err != nil || first != time.Second {
+		t.Fatalf("first waiter = %s err=%v, want 1s", first, err)
+	}
+	second, err := limiter.reserve("uid-1")
+	if err != nil || second != 2*time.Second {
+		t.Fatalf("second waiter = %s err=%v, want 2s", second, err)
+	}
+	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrProviderRateLimited) {
+		t.Fatalf("third waiter error = %v, want cumulative MaxWait reject", err)
+	}
+}
+
 func TestCookieHTTPAdapterGetJSONMapsRateLimitAndRiskControl(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -89,6 +110,19 @@ func TestCookieHTTPAdapterGetJSONMapsRateLimitAndRiskControl(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestInitRapidUploadTakesOneTokenPerHTTPRequest(t *testing.T) {
+	server := newRapidUploadServer(t, `{"status":2,"statuscode":0}`)
+	defer server.Close()
+	adapter := newTestRapidUploadAdapter(t, server)
+	adapter.limiter = newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 2, MaxWait: time.Millisecond})
+	if _, err := adapter.InitRapidUpload(context.Background(), fixtureCredential(), fixtureRapidUploadRequest()); err != nil {
+		t.Fatalf("two HTTP calls exhausted three tokens: %v", err)
+	}
+	if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrProviderRateLimited) {
+		t.Fatalf("follow-up search error = %v, want local rate limit after two tokens", err)
 	}
 }
 

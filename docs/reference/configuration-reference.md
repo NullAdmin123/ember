@@ -180,6 +180,8 @@ Go 统一入口仍会在日志初始化前加载 `EMBER_DOTENV` 指定文件；�
 | `P115_DATA_PLANE_MAX_WAIT` | 否 | 本地限流最长等待；默认 `2s`，超过即 `provider_rate_limited` | 避免播放请求无限排队 |
 | `P115_RATE_LIMIT_COOLDOWN` | 否 | 115 `429` 账号冷却；默认 `15s` | 短暂冷却，不停用账号 |
 | `P115_RISK_CONTROL_COOLDOWN` | 否 | 115 API `403` 账号冷却；默认 `30s` | 短暂冷却，不 `expired + disabled` |
+
+官方 Compose 会把上述 5 项同时注入 `ember-api` 与 `ember-gateway`；`infrastructure/docker/.env.example` 以注释列出可选覆盖。它们不是启动硬依赖，因此不写入 `services/api/.env.example`。
 | `ADMIN_USERNAME` | 否 | 首次初始化管理员用户名 | 仅首次启动且需要初始化管理员时才有意义 |
 | `ADMIN_PASSWORD` | 是 | 首次初始化管理员密码 | 仅首次启动且需要初始化管理员时才有意义 |
 

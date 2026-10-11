@@ -478,9 +478,6 @@ func (a *CookieHTTPAdapter) InitRapidUpload(ctx context.Context, credential Cred
 	if err != nil {
 		return RapidUploadResult{}, err
 	}
-	if err := a.waitDataPlane(ctx, credential); err != nil {
-		return RapidUploadResult{}, err
-	}
 	uploadInfo, err := a.GetUploadInfo(ctx, credential)
 	if err != nil {
 		return RapidUploadResult{}, err
