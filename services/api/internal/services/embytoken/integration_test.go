@@ -80,11 +80,12 @@ func TestIntegrationConcurrentAuthenticationCreatesOneDigestMapping(t *testing.T
 	}
 }
 
+// TestIntegrationDeviceAndUserRevocationScopes isolates device revocation for a user with an active resource grant.
 func TestIntegrationDeviceAndUserRevocationScopes(t *testing.T) {
 	database := newTokenIntegrationDatabase(t)
 	seedTokenUser(t, database, models.User{
 		ID: "user_token_2", Username: "token-user-2", Role: "user",
-		EmbyID: "emby-user-2", IsActive: true,
+		EmbyID: "emby-user-2", IsActive: true, ResourceAccessGranted: true,
 	})
 	service, err := NewService(database, "fixture-token-root-key", testServerID)
 	if err != nil {
