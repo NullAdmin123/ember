@@ -140,7 +140,9 @@ func rateLimitCooldown() time.Duration {
 	return durationFromEnv("P115_RATE_LIMIT_COOLDOWN", defaultRateLimitCooldown)
 }
 
-// riskControlCooldown is the brief shared pause after a 115 API 403.
+// riskControlCooldown is the brief shared pause after a verified
+// provider_risk_control outcome. Bare HTTP 403 is not a trigger;
+// the sentinel stays reserved until a structured 115 code is confirmed.
 func riskControlCooldown() time.Duration {
 	return durationFromEnv("P115_RISK_CONTROL_COOLDOWN", defaultRiskControlCooldown)
 }

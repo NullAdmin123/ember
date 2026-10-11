@@ -220,7 +220,7 @@ func TestCookieHTTPAdapterGetDownloadURLMapsSafeProviderFailures(t *testing.T) {
 	}{
 		{name: "http status", statusCode: http.StatusServiceUnavailable, body: "cookie-secret", wantErr: ErrProviderUnavailable},
 		{name: "rate limited", statusCode: http.StatusTooManyRequests, body: "cookie-secret", wantErr: ErrProviderRateLimited},
-		{name: "risk control", statusCode: http.StatusForbidden, body: "cookie-secret", wantErr: ErrProviderRiskControl},
+		{name: "forbidden", statusCode: http.StatusForbidden, body: "cookie-secret", wantErr: ErrProviderUnavailable},
 		{name: "invalid outer json", statusCode: http.StatusOK, body: `{"state":`, wantErr: ErrProviderProtocol},
 		{name: "provider rejected", statusCode: http.StatusOK, body: `{"state":false,"error":"cookie-secret"}`, wantErr: ErrProviderRejected},
 		{name: "missing data", statusCode: http.StatusOK, body: `{"state":true}`, wantErr: ErrProviderProtocol},

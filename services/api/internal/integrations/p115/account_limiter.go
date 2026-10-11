@@ -53,8 +53,8 @@ type dataPlaneWaiter struct {
 
 // ParseDataPlaneLimitConfig reads optional env overrides. Invalid values keep
 // the conservative defaults rather than disabling protection. RPS=0 remains
-// the explicit bypass; Inf/NaN, sub-minimum, and negative RPS keep the
-// default. Burst and MaxWait must be positive.
+// the explicit bypass; Inf/NaN, sub-minimum, negative, and negative-zero RPS
+// keep the default. Burst and MaxWait must be positive.
 func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 	config := DataPlaneLimitConfig{
 		RPS:     defaultDataPlaneRPS,
@@ -63,7 +63,8 @@ func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 	}
 	if value := strings.TrimSpace(os.Getenv("P115_DATA_PLANE_RPS")); value != "" {
 		if parsed, err := strconv.ParseFloat(value, 64); err == nil && isFiniteRate(parsed) {
-			if parsed == 0 || parsed >= minDataPlaneRPS {
+			// Signbit rejects -0 / -0.0, which ParseFloat treats as 0.
+			if !math.Signbit(parsed) && (parsed == 0 || parsed >= minDataPlaneRPS) {
 				config.RPS = parsed
 			}
 		}

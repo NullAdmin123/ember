@@ -190,7 +190,7 @@ func TestCookieHTTPAdapterDeleteFileMapsSafeProviderFailures(t *testing.T) {
 		wantErr    error
 	}{
 		{name: "rate limited", statusCode: http.StatusTooManyRequests, body: "cookie-secret", wantErr: ErrProviderRateLimited},
-		{name: "risk control", statusCode: http.StatusForbidden, body: "cookie-secret", wantErr: ErrProviderRiskControl},
+		{name: "forbidden", statusCode: http.StatusForbidden, body: "cookie-secret", wantErr: ErrProviderUnavailable},
 		{name: "http status", statusCode: http.StatusServiceUnavailable, body: "cookie-secret", wantErr: ErrProviderUnavailable},
 		{name: "invalid json", statusCode: http.StatusOK, body: `{"state":`, wantErr: ErrProviderProtocol},
 		{name: "missing state", statusCode: http.StatusOK, body: `{}`, wantErr: ErrProviderProtocol},

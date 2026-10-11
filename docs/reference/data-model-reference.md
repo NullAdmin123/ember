@@ -592,7 +592,7 @@ MediaGapScan                    （缺集扫描持久化记录，advisory lock �
 - 启用前必须同时满足 `active`、非空 `provider_user_id` 和非空 `last_validated_at`；检查与更新在事务行锁内完成
 - 验证回写必须匹配发起请求时的 Cookie 密文，防止并发轮换后旧验证结果覆盖新凭证状态
 - DirectPlay 运行期回写同时匹配加载凭证时的 Cookie 密文、`config_version` 和 `updated_at`；旧请求不能覆盖 Cookie 轮换、显式验证、手工启停或更新后的健康结果
-- `credential_rejected` 进入 `expired + disabled`；`provider_unavailable` 保留启用意图并进入 1 分钟 `cooling_down`；`provider_rate_limited` / `provider_risk_control` 同样保留启用意图，分别默认冷却 15 秒 / 30 秒；`provider_protocol` 进入 `error`；本地数据面排队超限不回写 `last_error_code` 或冷却；成功签发完整候选后恢复 `active` 并清空冷却和错误；持续健康成功的 `last_succeeded_at` 按 1 分钟采样，错误和恢复不延迟
+- `credential_rejected` 进入 `expired + disabled`；`provider_unavailable` 保留启用意图并进入 1 分钟 `cooling_down`；`provider_rate_limited` / `provider_risk_control` 同样保留启用意图，分别默认冷却 15 秒 / 30 秒；`provider_protocol` 进入 `error`；本地数据面排队超限不回写 `last_error_code` 或冷却；成功签发完整候选后恢复 `active` 并清空冷却和错误；持续健康成功的 `last_succeeded_at` 按 1 分钟采样，错误和恢复不延迟。裸 HTTP `403` 回写 `provider_unavailable`，不触发风控冷却；`provider_risk_control` 哨兵待真实结构化错误码接入
 - 未到期冷却不读取运行期 Cookie；冷却到期后在 PostgreSQL 行锁内延长 1 分钟租约并只放行一个半开探测，成功立即恢复，失败重新开始冷却
 - 个人账号解绑不物理删除：事务内写入不可复活 `revoked + disabled`，清空 owner、凭证、Provider、目录、并发和健康字段，保留 ID/role/alias/authMode/时间供 transfer provenance 引用
 - 个人 `maxConcurrentStreams` 在 Service 层限制为 `1..100`，并受当前有效套餐正数 `SimultaneousStreamLimit` 约束；已启用账号遇到套餐降低时数据库配置不回写，运行时使用两者较小值

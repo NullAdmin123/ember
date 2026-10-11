@@ -82,8 +82,9 @@ func TestSourceRangeHealthClassification(t *testing.T) {
 	}
 }
 
-// TestRateLimitAndRiskControlStayAccountWideButNeverExpire covers data-plane
-// 429/403 mapping: brief cooling, never expired+disabled, including source path.
+// TestRateLimitAndRiskControlStayAccountWideButNeverExpire covers sentinel
+// mapping: real 429 and reserved risk-control stay brief cooling, never
+// expired+disabled, including source path. Bare HTTP 403 is unavailable.
 func TestRateLimitAndRiskControlStayAccountWideButNeverExpire(t *testing.T) {
 	tests := []struct {
 		err     error

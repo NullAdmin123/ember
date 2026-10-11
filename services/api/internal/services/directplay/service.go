@@ -1170,7 +1170,9 @@ func (service *Service) reportRuntimeHealthWithContext(
 
 // runtimeHealthOutcome excludes cancellation, local data-plane queue overflow,
 // and source-path rejection or protocol errors from account-wide changes.
-// Source credential and real upstream 429/403 still retain expiry/cooldown.
+// Source credential and real upstream 429 still retain expiry/cooldown.
+// Bare HTTP 403 is treated as unavailable; the reserved risk-control
+// sentinel still maps to cooldown when a verified structured code produces it.
 func runtimeHealthOutcome(operation string, err error) (p115account.RuntimeHealthOutcome, bool) {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

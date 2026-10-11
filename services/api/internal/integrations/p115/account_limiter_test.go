@@ -90,6 +90,18 @@ func TestParseDataPlaneLimitConfigRejectsTinyRPS(t *testing.T) {
 	}
 }
 
+func TestParseDataPlaneLimitConfigRejectsNegativeZeroRPS(t *testing.T) {
+	for _, value := range []string{"-0", "-0.0", "-0.00"} {
+		t.Setenv("P115_DATA_PLANE_RPS", value)
+		t.Setenv("P115_DATA_PLANE_BURST", "")
+		t.Setenv("P115_DATA_PLANE_MAX_WAIT", "")
+		config := ParseDataPlaneLimitConfig()
+		if config.RPS != defaultDataPlaneRPS {
+			t.Fatalf("RPS %q leaked as %v, want default %v", value, config.RPS, defaultDataPlaneRPS)
+		}
+	}
+}
+
 func TestDurationFromSecondsDoesNotOverflow(t *testing.T) {
 	if got := durationFromSeconds(1e10); got <= 0 {
 		t.Fatalf("huge seconds overflowed to %s", got)
@@ -272,14 +284,42 @@ func TestAccountRateLimiterRandomCancelKeepsGrantSpacing(t *testing.T) {
 	assertUniqueGrantSpacing(t, got, time.Duration(float64(time.Second)/rps)-2*time.Millisecond)
 }
 
-func TestCookieHTTPAdapterGetJSONMapsRateLimitAndRiskControl(t *testing.T) {
+func TestMapCookieAPIStatusClassifiesBareStatuses(t *testing.T) {
+	tests := []struct {
+		status  int
+		wantErr error
+	}{
+		{status: http.StatusOK, wantErr: nil},
+		{status: http.StatusTooManyRequests, wantErr: ErrProviderRateLimited},
+		{status: http.StatusForbidden, wantErr: ErrProviderUnavailable},
+		{status: http.StatusUnauthorized, wantErr: ErrProviderUnavailable},
+		{status: http.StatusServiceUnavailable, wantErr: ErrProviderUnavailable},
+	}
+	for _, test := range tests {
+		err := mapCookieAPIStatus(test.status)
+		if test.wantErr == nil {
+			if err != nil {
+				t.Fatalf("status %d error = %v, want nil", test.status, err)
+			}
+			continue
+		}
+		if !errors.Is(err, test.wantErr) {
+			t.Fatalf("status %d error = %v, want %v", test.status, err, test.wantErr)
+		}
+		if errors.Is(err, ErrProviderRiskControl) {
+			t.Fatalf("status %d must not map to risk control", test.status)
+		}
+	}
+}
+
+func TestCookieHTTPAdapterGetJSONMapsRateLimitAndBareForbidden(t *testing.T) {
 	tests := []struct {
 		name    string
 		status  int
 		wantErr error
 	}{
 		{name: "too many requests", status: http.StatusTooManyRequests, wantErr: ErrProviderRateLimited},
-		{name: "forbidden", status: http.StatusForbidden, wantErr: ErrProviderRiskControl},
+		{name: "forbidden", status: http.StatusForbidden, wantErr: ErrProviderUnavailable},
 		{name: "unavailable", status: http.StatusServiceUnavailable, wantErr: ErrProviderUnavailable},
 	}
 	for _, test := range tests {
