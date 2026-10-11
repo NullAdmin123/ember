@@ -3,8 +3,12 @@ package p115
 import (
 	"context"
 	"errors"
+	"math"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,10 +80,30 @@ func TestParseDataPlaneLimitConfigRejectsNonFiniteRPS(t *testing.T) {
 	}
 }
 
+func TestParseDataPlaneLimitConfigRejectsTinyRPS(t *testing.T) {
+	t.Setenv("P115_DATA_PLANE_RPS", "1e-10")
+	t.Setenv("P115_DATA_PLANE_BURST", "")
+	t.Setenv("P115_DATA_PLANE_MAX_WAIT", "")
+	config := ParseDataPlaneLimitConfig()
+	if config.RPS != defaultDataPlaneRPS {
+		t.Fatalf("tiny RPS leaked as %v, want default", config.RPS)
+	}
+}
+
+func TestDurationFromSecondsDoesNotOverflow(t *testing.T) {
+	if got := durationFromSeconds(1e10); got <= 0 {
+		t.Fatalf("huge seconds overflowed to %s", got)
+	}
+	if got := durationFromSeconds(math.Inf(1)); got <= 0 {
+		t.Fatalf("Inf seconds overflowed to %s", got)
+	}
+	if got := durationFromSeconds(-1); got != 0 {
+		t.Fatalf("negative seconds = %s", got)
+	}
+}
+
 func TestAccountRateLimiterRejectsWhenWaitExceedsMax(t *testing.T) {
 	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: time.Millisecond})
-	now := time.Now()
-	limiter.now = func() time.Time { return now }
 	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
 		t.Fatalf("first token: %v", err)
 	}
@@ -103,88 +127,149 @@ func TestAccountRateLimiterCanceledWaitDoesNotBecomeRateLimit(t *testing.T) {
 	}
 }
 
-func TestAccountRateLimiterCanceledWaitRestoresCapacity(t *testing.T) {
-	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
-	now := time.Unix(1_700_000_000, 0).UTC()
-	limiter.now = func() time.Time { return now }
+func TestAccountRateLimiterTinyRPSDoesNotBypassMaxWait(t *testing.T) {
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1e-10, Burst: 1, MaxWait: time.Second})
+	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
+		t.Fatalf("burst token: %v", err)
+	}
+	if err := limiter.Wait(context.Background(), "uid-1"); !errors.Is(err, ErrDataPlaneQueueLimited) {
+		t.Fatalf("tiny RPS error = %v, want queue limit not instant grant", err)
+	}
+}
+
+func TestAccountRateLimiterCancelRestoresCapacityForNewArrival(t *testing.T) {
+	clock := newManualClock(time.Unix(1_700_000_000, 0).UTC())
+	limiter := newManualLimiter(clock, DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
 	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
 		t.Fatalf("burst token: %v", err)
 	}
 
 	for i := 0; i < 3; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
-		started := make(chan struct{})
 		done := make(chan error, 1)
-		go func() {
-			close(started)
-			done <- limiter.Wait(ctx, "uid-1")
-		}()
-		<-started
-		waitForReservation(t, limiter, "uid-1")
+		go func() { done <- limiter.Wait(ctx, "uid-1") }()
+		waitUntilQueued(t, limiter, "uid-1", 1)
 		cancel()
 		if err := <-done; !errors.Is(err, context.Canceled) {
 			t.Fatalf("canceled waiter %d error = %v", i, err)
 		}
 	}
 
-	reserved, err := limiter.reserve("uid-1")
-	if err != nil {
-		t.Fatalf("real request after canceled waiters: %v", err)
-	}
-	if reserved.wait != time.Second {
-		t.Fatalf("after canceled waiters wait = %s, want 1s refill not a leaked queue", reserved.wait)
+	done := make(chan error, 1)
+	go func() { done <- limiter.Wait(context.Background(), "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 1)
+	clock.Advance(time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("new request after cancels: %v", err)
 	}
 }
 
-func TestAccountRateLimiterNonTipCancelRestoresCapacity(t *testing.T) {
-	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
-	now := time.Unix(1_700_000_000, 0).UTC()
-	limiter.now = func() time.Time { return now }
+func TestAccountRateLimiterCanceledWaitersLeaveUniqueGrantSlots(t *testing.T) {
+	clock := newManualClock(time.Unix(1_700_000_000, 0).UTC())
+	limiter := newManualLimiter(clock, DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 3 * time.Second})
+	var grants []time.Time
+	limiter.observeGrant = func(at time.Time) {
+		grants = append(grants, at)
+	}
 	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
 		t.Fatalf("burst token: %v", err)
 	}
 
-	earlier, err := limiter.reserve("uid-1")
-	if err != nil || earlier.wait != time.Second {
-		t.Fatalf("earlier reservation = %s err=%v, want 1s", earlier.wait, err)
-	}
-	later, err := limiter.reserve("uid-1")
-	if err != nil || later.wait != 2*time.Second {
-		t.Fatalf("later reservation = %s err=%v, want 2s", later.wait, err)
-	}
+	ctxA, cancelA := context.WithCancel(context.Background())
+	ctxB, cancelB := context.WithCancel(context.Background())
+	doneA := make(chan error, 1)
+	doneB := make(chan error, 1)
+	doneC := make(chan error, 1)
+	go func() { doneA <- limiter.Wait(ctxA, "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 1)
+	go func() { doneB <- limiter.Wait(ctxB, "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 2)
 
-	limiter.cancelReserve(earlier)
-	reused, err := limiter.reserve("uid-1")
-	if err != nil || reused.wait != 2*time.Second {
-		t.Fatalf("after non-tip cancel wait = %s err=%v, want restored 2s slot not queue limit", reused.wait, err)
+	cancelA()
+	if err := <-doneA; !errors.Is(err, context.Canceled) {
+		t.Fatalf("A error = %v", err)
 	}
-	limiter.cancelReserve(reused)
-	limiter.cancelReserve(later)
-	restored, err := limiter.reserve("uid-1")
-	if err != nil || restored.wait != time.Second {
-		t.Fatalf("after remaining cancels wait = %s err=%v, want 1s refill", restored.wait, err)
+	waitUntilQueued(t, limiter, "uid-1", 1)
+
+	go func() { doneC <- limiter.Wait(context.Background(), "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 2)
+
+	clock.Advance(3 * time.Second)
+	if err := <-doneB; err != nil {
+		t.Fatalf("B error = %v", err)
 	}
+	if err := <-doneC; err != nil {
+		t.Fatalf("C error = %v", err)
+	}
+	cancelB()
+
+	delayed := grants[1:]
+	assertUniqueGrantSpacing(t, delayed, time.Second)
 }
 
-func TestAccountRateLimiterStaggersConcurrentReservationsAndEnforcesMaxWait(t *testing.T) {
-	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
-	now := time.Unix(1_700_000_000, 0).UTC()
-	limiter.now = func() time.Time { return now }
+func TestAccountRateLimiterStaggersQueueAndEnforcesMaxWait(t *testing.T) {
+	clock := newManualClock(time.Unix(1_700_000_000, 0).UTC())
+	limiter := newManualLimiter(clock, DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
 	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
 		t.Fatalf("burst token: %v", err)
 	}
+	doneFirst := make(chan error, 1)
+	doneSecond := make(chan error, 1)
+	go func() { doneFirst <- limiter.Wait(context.Background(), "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 1)
+	go func() { doneSecond <- limiter.Wait(context.Background(), "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 2)
+	if err := limiter.Wait(context.Background(), "uid-1"); !errors.Is(err, ErrDataPlaneQueueLimited) {
+		t.Fatalf("third waiter error = %v, want MaxWait reject", err)
+	}
+	clock.Advance(2 * time.Second)
+	if err := <-doneFirst; err != nil {
+		t.Fatalf("first waiter: %v", err)
+	}
+	if err := <-doneSecond; err != nil {
+		t.Fatalf("second waiter: %v", err)
+	}
+}
 
-	first, err := limiter.reserve("uid-1")
-	if err != nil || first.wait != time.Second {
-		t.Fatalf("first waiter = %s err=%v, want 1s", first.wait, err)
+func TestAccountRateLimiterRandomCancelKeepsGrantSpacing(t *testing.T) {
+	const rps = 20.0
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: rps, Burst: 1, MaxWait: time.Second})
+	var mu sync.Mutex
+	var grants []time.Time
+	limiter.observeGrant = func(at time.Time) {
+		mu.Lock()
+		grants = append(grants, at)
+		mu.Unlock()
 	}
-	second, err := limiter.reserve("uid-1")
-	if err != nil || second.wait != 2*time.Second {
-		t.Fatalf("second waiter = %s err=%v, want 2s", second.wait, err)
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(seed int64) {
+			defer wg.Done()
+			<-start
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if rand.New(rand.NewSource(seed)).Intn(2) == 0 {
+				go func() {
+					time.Sleep(time.Duration(rand.New(rand.NewSource(seed+99)).Intn(8)) * time.Millisecond)
+					cancel()
+				}()
+			}
+			_ = limiter.Wait(ctx, "uid-1")
+		}(int64(i + 1))
 	}
-	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrDataPlaneQueueLimited) {
-		t.Fatalf("third waiter error = %v, want cumulative MaxWait reject", err)
+	close(start)
+	wg.Wait()
+
+	mu.Lock()
+	got := append([]time.Time(nil), grants...)
+	mu.Unlock()
+	if len(got) == 0 {
+		t.Fatal("random cancel granted nobody")
 	}
+	assertUniqueGrantSpacing(t, got, time.Duration(float64(time.Second)/rps)-2*time.Millisecond)
 }
 
 func TestCookieHTTPAdapterGetJSONMapsRateLimitAndRiskControl(t *testing.T) {
@@ -234,8 +319,6 @@ func TestCookieHTTPAdapterLocalQueueLimitDoesNotReach115(t *testing.T) {
 	defer server.Close()
 	adapter := newTestCookieHTTPAdapter(t, server)
 	adapter.limiter = newAccountRateLimiter(DataPlaneLimitConfig{RPS: 2, Burst: 4, MaxWait: time.Millisecond})
-	now := time.Unix(1_700_000_000, 0).UTC()
-	adapter.limiter.now = func() time.Time { return now }
 	for i := 0; i < 4; i++ {
 		if _, err := adapter.SearchBySHA1(context.Background(), fixtureCredential(), FileQuery{SHA1: fixtureSHA1, Size: 1024}); !errors.Is(err, ErrProviderRejected) {
 			t.Fatalf("burst token %d error = %v", i, err)
@@ -269,18 +352,107 @@ func TestCookieHTTPAdapterPacesDataPlaneCallsPerAccount(t *testing.T) {
 	}
 }
 
-func waitForReservation(t *testing.T, limiter *accountRateLimiter, accountKey string) {
+type manualClock struct {
+	mu     sync.Mutex
+	now    time.Time
+	timers []*manualTimer
+}
+
+type manualTimer struct {
+	when    time.Time
+	fn      func()
+	stopped bool
+}
+
+func newManualClock(now time.Time) *manualClock {
+	return &manualClock{now: now}
+}
+
+func (clock *manualClock) Now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.now
+}
+
+func (clock *manualClock) AfterFunc(delay time.Duration, fn func()) func() {
+	clock.mu.Lock()
+	timer := &manualTimer{when: clock.now.Add(delay), fn: fn}
+	clock.timers = append(clock.timers, timer)
+	clock.mu.Unlock()
+	return func() {
+		clock.mu.Lock()
+		timer.stopped = true
+		clock.mu.Unlock()
+	}
+}
+
+func (clock *manualClock) Advance(delay time.Duration) {
+	target := clock.Now().Add(delay)
+	for {
+		timer := clock.nextDue(target)
+		if timer == nil {
+			clock.mu.Lock()
+			clock.now = target
+			clock.mu.Unlock()
+			return
+		}
+		clock.mu.Lock()
+		clock.now = timer.when
+		clock.mu.Unlock()
+		timer.fn()
+	}
+}
+
+func (clock *manualClock) nextDue(target time.Time) *manualTimer {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	var chosen *manualTimer
+	chosenIndex := -1
+	for i, timer := range clock.timers {
+		if timer.stopped || timer.when.After(target) {
+			continue
+		}
+		if chosen == nil || timer.when.Before(chosen.when) {
+			chosen = timer
+			chosenIndex = i
+		}
+	}
+	if chosenIndex >= 0 {
+		clock.timers = append(clock.timers[:chosenIndex], clock.timers[chosenIndex+1:]...)
+	}
+	return chosen
+}
+
+func newManualLimiter(clock *manualClock, config DataPlaneLimitConfig) *accountRateLimiter {
+	limiter := newAccountRateLimiter(config)
+	limiter.now = clock.Now
+	limiter.afterFunc = clock.AfterFunc
+	return limiter
+}
+
+func waitUntilQueued(t *testing.T, limiter *accountRateLimiter, accountKey string, n int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		limiter.mu.Lock()
-		bucket := limiter.buckets[accountKey]
-		ready := bucket != nil && bucket.outstanding > 0
-		limiter.mu.Unlock()
-		if ready {
+		if limiter.queuedWaiters(accountKey) >= n {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("Wait did not reserve before cancel")
+	t.Fatalf("queued waiters = %d, want >= %d", limiter.queuedWaiters(accountKey), n)
+}
+
+func assertUniqueGrantSpacing(t *testing.T, grants []time.Time, minGap time.Duration) {
+	t.Helper()
+	if len(grants) < 2 {
+		return
+	}
+	sorted := append([]time.Time(nil), grants...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Before(sorted[j]) })
+	for i := 1; i < len(sorted); i++ {
+		gap := sorted[i].Sub(sorted[i-1])
+		if gap < minGap || gap == 0 {
+			t.Fatalf("grant gap %s between %s and %s, want >= %s unique slots", gap, sorted[i-1], sorted[i], minGap)
+		}
+	}
 }
