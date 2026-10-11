@@ -40,6 +40,30 @@ func TestParseDataPlaneLimitConfigKeepsDefaultsForInvalidValues(t *testing.T) {
 	}
 }
 
+func TestParseDataPlaneLimitConfigRejectsNonPositiveBurstAndMaxWait(t *testing.T) {
+	t.Setenv("P115_DATA_PLANE_RPS", "0")
+	t.Setenv("P115_DATA_PLANE_BURST", "0")
+	t.Setenv("P115_DATA_PLANE_MAX_WAIT", "0")
+	config := ParseDataPlaneLimitConfig()
+	if config.RPS != 0 {
+		t.Fatalf("RPS 0 should disable waiting: %+v", config)
+	}
+	if config.Burst != defaultDataPlaneBurst {
+		t.Fatalf("Burst 0 leaked as %d, want default %d", config.Burst, defaultDataPlaneBurst)
+	}
+	if config.MaxWait != defaultDataPlaneMaxWait {
+		t.Fatalf("MaxWait 0 leaked as %s, want default %s", config.MaxWait, defaultDataPlaneMaxWait)
+	}
+
+	t.Setenv("P115_DATA_PLANE_RPS", "-0.5")
+	t.Setenv("P115_DATA_PLANE_BURST", "-2")
+	t.Setenv("P115_DATA_PLANE_MAX_WAIT", "-1s")
+	config = ParseDataPlaneLimitConfig()
+	if config.RPS != defaultDataPlaneRPS || config.Burst != defaultDataPlaneBurst || config.MaxWait != defaultDataPlaneMaxWait {
+		t.Fatalf("negative override leaked: %+v", config)
+	}
+}
+
 func TestAccountRateLimiterRejectsWhenWaitExceedsMax(t *testing.T) {
 	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: time.Millisecond})
 	now := time.Now()
@@ -67,6 +91,68 @@ func TestAccountRateLimiterCanceledWaitDoesNotBecomeRateLimit(t *testing.T) {
 	}
 }
 
+func TestAccountRateLimiterCanceledWaitRestoresCapacity(t *testing.T) {
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
+	now := time.Unix(1_700_000_000, 0).UTC()
+	limiter.now = func() time.Time { return now }
+	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
+		t.Fatalf("burst token: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		started := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			close(started)
+			done <- limiter.Wait(ctx, "uid-1")
+		}()
+		<-started
+		waitForReservation(t, limiter, "uid-1")
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled waiter %d error = %v", i, err)
+		}
+	}
+
+	reserved, err := limiter.reserve("uid-1")
+	if err != nil {
+		t.Fatalf("real request after canceled waiters: %v", err)
+	}
+	if reserved.wait != time.Second {
+		t.Fatalf("after canceled waiters wait = %s, want 1s refill not a leaked queue", reserved.wait)
+	}
+}
+
+func TestAccountRateLimiterCancelOnlyRewindsTipReservation(t *testing.T) {
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
+	now := time.Unix(1_700_000_000, 0).UTC()
+	limiter.now = func() time.Time { return now }
+	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
+		t.Fatalf("burst token: %v", err)
+	}
+
+	earlier, err := limiter.reserve("uid-1")
+	if err != nil || earlier.wait != time.Second {
+		t.Fatalf("earlier reservation = %s err=%v, want 1s", earlier.wait, err)
+	}
+	tip, err := limiter.reserve("uid-1")
+	if err != nil || tip.wait != 2*time.Second {
+		t.Fatalf("tip reservation = %s err=%v, want 2s", tip.wait, err)
+	}
+
+	limiter.cancelReserve(earlier)
+	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrProviderRateLimited) {
+		t.Fatalf("canceling a non-tip reservation moved later slots: %v", err)
+	}
+
+	limiter.cancelReserve(tip)
+	restored, err := limiter.reserve("uid-1")
+	if err != nil || restored.wait != time.Second {
+		t.Fatalf("after tip cancel wait = %s err=%v, want restored 1s refill", restored.wait, err)
+	}
+}
+
 func TestAccountRateLimiterStaggersConcurrentReservationsAndEnforcesMaxWait(t *testing.T) {
 	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: 2 * time.Second})
 	now := time.Unix(1_700_000_000, 0).UTC()
@@ -76,12 +162,12 @@ func TestAccountRateLimiterStaggersConcurrentReservationsAndEnforcesMaxWait(t *t
 	}
 
 	first, err := limiter.reserve("uid-1")
-	if err != nil || first != time.Second {
-		t.Fatalf("first waiter = %s err=%v, want 1s", first, err)
+	if err != nil || first.wait != time.Second {
+		t.Fatalf("first waiter = %s err=%v, want 1s", first.wait, err)
 	}
 	second, err := limiter.reserve("uid-1")
-	if err != nil || second != 2*time.Second {
-		t.Fatalf("second waiter = %s err=%v, want 2s", second, err)
+	if err != nil || second.wait != 2*time.Second {
+		t.Fatalf("second waiter = %s err=%v, want 2s", second.wait, err)
 	}
 	if _, err := limiter.reserve("uid-1"); !errors.Is(err, ErrProviderRateLimited) {
 		t.Fatalf("third waiter error = %v, want cumulative MaxWait reject", err)
@@ -144,4 +230,20 @@ func TestCookieHTTPAdapterPacesDataPlaneCallsPerAccount(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("rate-limited call reached 115: calls=%d", calls.Load())
 	}
+}
+
+func waitForReservation(t *testing.T, limiter *accountRateLimiter, accountKey string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		limiter.mu.Lock()
+		bucket := limiter.buckets[accountKey]
+		ready := bucket != nil && bucket.outstanding > 0
+		limiter.mu.Unlock()
+		if ready {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("Wait did not reserve before cancel")
 }

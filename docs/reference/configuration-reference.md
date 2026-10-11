@@ -175,11 +175,11 @@ Go 统一入口仍会在日志初始化前加载 `EMBER_DOTENV` 指定文件；�
 | 配置项 | 敏感 | 说明 | 原因 |
 |--------|------|------|------|
 | `PORT` | 否 | API 监听端口 | 有默认值 `8080`，属于进程启动参数 |
-| `P115_DATA_PLANE_RPS` | 否 | 115 Cookie/Web 数据面每账号令牌桶速率；默认 `2`，`0` 关闭等待 | 保守默认，仅部署覆盖 |
-| `P115_DATA_PLANE_BURST` | 否 | 115 数据面每账号突发容量；默认 `4` | 与 RPS 配套的进程内限流 |
-| `P115_DATA_PLANE_MAX_WAIT` | 否 | 本地限流最长等待；默认 `2s`，超过即 `provider_rate_limited` | 避免播放请求无限排队 |
-| `P115_RATE_LIMIT_COOLDOWN` | 否 | 115 `429` 账号冷却；默认 `15s` | 短暂冷却，不停用账号 |
-| `P115_RISK_CONTROL_COOLDOWN` | 否 | 115 API `403` 账号冷却；默认 `30s` | 短暂冷却，不 `expired + disabled` |
+| `P115_DATA_PLANE_RPS` | 否 | 115 Cookie/Web 数据面每账号令牌桶速率；默认 `2`，`0` 关闭等待；负数或非法值保留默认 | 保守默认，仅部署覆盖 |
+| `P115_DATA_PLANE_BURST` | 否 | 115 数据面每账号突发容量；默认 `4`；`<=0` 或非法值保留默认，不把 `0` 改写成 `1` | 与 RPS 配套的进程内限流 |
+| `P115_DATA_PLANE_MAX_WAIT` | 否 | 本地限流最长等待；默认 `2s`，超过即 `provider_rate_limited`；必须为正，`0`/负值/非法值保留默认，避免无限排队 | 避免播放请求无限排队 |
+| `P115_RATE_LIMIT_COOLDOWN` | 否 | 115 `429` 账号冷却；默认 `15s`；`<=0` 或非法值保留默认 | 短暂冷却，不停用账号 |
+| `P115_RISK_CONTROL_COOLDOWN` | 否 | 115 API `403` 账号冷却；默认 `30s`；`<=0` 或非法值保留默认 | 短暂冷却，不 `expired + disabled` |
 
 官方 Compose 会把上述 5 项同时注入 `ember-api` 与 `ember-gateway`；`infrastructure/docker/.env.example` 以注释列出可选覆盖。它们不是启动硬依赖，因此不写入 `services/api/.env.example`。
 | `ADMIN_USERNAME` | 否 | 首次初始化管理员用户名 | 仅首次启动且需要初始化管理员时才有意义 |

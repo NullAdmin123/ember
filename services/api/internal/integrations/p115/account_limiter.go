@@ -31,12 +31,22 @@ type accountRateLimiter struct {
 }
 
 type tokenBucket struct {
-	tokens float64
-	last   time.Time
+	tokens      float64
+	last        time.Time
+	outstanding int
+}
+
+// dataPlaneReservation is one delayed token slot. Immediate tokens do not
+// create a reservation that later Wait cancellation can roll back.
+type dataPlaneReservation struct {
+	accountKey string
+	readyAt    time.Time
+	wait       time.Duration
 }
 
 // ParseDataPlaneLimitConfig reads optional env overrides. Invalid values keep
-// the conservative defaults rather than disabling protection.
+// the conservative defaults rather than disabling protection. RPS=0 remains
+// the explicit bypass; Burst and MaxWait must be positive.
 func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 	config := DataPlaneLimitConfig{
 		RPS:     defaultDataPlaneRPS,
@@ -49,17 +59,14 @@ func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("P115_DATA_PLANE_BURST")); value != "" {
-		if parsed, err := strconv.Atoi(value); err == nil && parsed >= 0 {
+		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
 			config.Burst = parsed
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("P115_DATA_PLANE_MAX_WAIT")); value != "" {
-		if parsed, err := time.ParseDuration(value); err == nil && parsed >= 0 {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
 			config.MaxWait = parsed
 		}
-	}
-	if config.Burst == 0 && config.RPS > 0 {
-		config.Burst = 1
 	}
 	return config
 }
@@ -82,6 +89,13 @@ func newAccountRateLimiter(config DataPlaneLimitConfig) *accountRateLimiter {
 	}
 }
 
+func (limiter *accountRateLimiter) currentTime() time.Time {
+	if limiter != nil && limiter.now != nil {
+		return limiter.now()
+	}
+	return time.Now()
+}
+
 // waitDataPlane paces Cookie/Web API calls for one Provider UID. Missing or
 // disabled limiters do not invent a quota. Context cancellation stays the
 // caller's timeout, not a rate-limit health event.
@@ -97,7 +111,8 @@ func (a *CookieHTTPAdapter) waitDataPlane(ctx context.Context, credential Creden
 }
 
 // Wait reserves one token for the account key or fails closed when the wait
-// would exceed MaxWait. Canceled callers receive the context error.
+// would exceed MaxWait. Canceled callers receive the context error and roll
+// back an unused delayed reservation so leftover queue cannot trip MaxWait.
 func (limiter *accountRateLimiter) Wait(ctx context.Context, accountKey string) error {
 	if limiter == nil || limiter.config.RPS <= 0 || strings.TrimSpace(accountKey) == "" {
 		return nil
@@ -105,19 +120,21 @@ func (limiter *accountRateLimiter) Wait(ctx context.Context, accountKey string) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	wait, err := limiter.reserve(accountKey)
+	reserved, err := limiter.reserve(accountKey)
 	if err != nil {
 		return err
 	}
-	if wait <= 0 {
+	if reserved.wait <= 0 {
 		return nil
 	}
-	timer := time.NewTimer(wait)
+	timer := time.NewTimer(reserved.wait)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
+		limiter.cancelReserve(reserved)
 		return ctx.Err()
 	case <-timer.C:
+		limiter.completeReserve(reserved)
 		return nil
 	}
 }
@@ -125,13 +142,10 @@ func (limiter *accountRateLimiter) Wait(ctx context.Context, accountKey string) 
 // reserve deducts one token or reports how long the caller must wait.
 // Future reservations accumulate from max(now, last) so concurrent waiters
 // are spaced at 1/RPS and MaxWait applies to the caller's total delay.
-func (limiter *accountRateLimiter) reserve(accountKey string) (time.Duration, error) {
+func (limiter *accountRateLimiter) reserve(accountKey string) (dataPlaneReservation, error) {
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
-	now := limiter.now()
-	if limiter.now == nil {
-		now = time.Now()
-	}
+	now := limiter.currentTime()
 	bucket := limiter.buckets[accountKey]
 	if bucket == nil {
 		bucket = &tokenBucket{tokens: float64(limiter.config.Burst), last: now}
@@ -148,7 +162,7 @@ func (limiter *accountRateLimiter) reserve(accountKey string) (time.Duration, er
 	if bucket.tokens >= 1 {
 		bucket.tokens--
 		bucket.last = cursor
-		return 0, nil
+		return dataPlaneReservation{accountKey: accountKey}, nil
 	}
 	needed := (1 - bucket.tokens) / limiter.config.RPS
 	next := cursor.Add(time.Duration(needed * float64(time.Second)))
@@ -157,9 +171,62 @@ func (limiter *accountRateLimiter) reserve(accountKey string) (time.Duration, er
 		wait = 0
 	}
 	if limiter.config.MaxWait > 0 && wait > limiter.config.MaxWait {
-		return 0, ErrProviderRateLimited
+		return dataPlaneReservation{}, ErrProviderRateLimited
 	}
 	bucket.tokens = 0
 	bucket.last = next
-	return wait, nil
+	bucket.outstanding++
+	return dataPlaneReservation{accountKey: accountKey, readyAt: next, wait: wait}, nil
+}
+
+// cancelReserve drops an unused delayed slot. A tip reservation rewinds last
+// by one interval; when no delayed waiters remain, unused future queue is
+// discarded. Non-tip cancels do not move later reservations earlier.
+func (limiter *accountRateLimiter) cancelReserve(reserved dataPlaneReservation) {
+	if limiter == nil || reserved.wait <= 0 || reserved.accountKey == "" {
+		return
+	}
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	bucket := limiter.buckets[reserved.accountKey]
+	if bucket == nil || bucket.outstanding <= 0 {
+		return
+	}
+	bucket.outstanding--
+	now := limiter.currentTime()
+	if bucket.outstanding == 0 {
+		if bucket.last.After(now) {
+			bucket.last = now
+		}
+		return
+	}
+	if !bucket.last.Equal(reserved.readyAt) {
+		return
+	}
+	rewound := bucket.last.Add(-limiter.tokenInterval())
+	if rewound.Before(now) {
+		rewound = now
+	}
+	bucket.last = rewound
+}
+
+// completeReserve marks a delayed waiter as having consumed its slot.
+func (limiter *accountRateLimiter) completeReserve(reserved dataPlaneReservation) {
+	if limiter == nil || reserved.wait <= 0 || reserved.accountKey == "" {
+		return
+	}
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	bucket := limiter.buckets[reserved.accountKey]
+	if bucket == nil || bucket.outstanding <= 0 {
+		return
+	}
+	bucket.outstanding--
+}
+
+func (limiter *accountRateLimiter) tokenInterval() time.Duration {
+	if limiter == nil || limiter.config.RPS <= 0 {
+		return 0
+	}
+	return time.Duration(float64(time.Second) / limiter.config.RPS)
 }

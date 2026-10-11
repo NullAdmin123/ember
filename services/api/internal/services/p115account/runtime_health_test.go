@@ -160,6 +160,34 @@ func TestServiceReportRuntimeHealthBuildsSafeStateMutation(t *testing.T) {
 	}
 }
 
+func TestDurationFromEnvRejectsNonPositiveCooldownOverrides(t *testing.T) {
+	t.Setenv("P115_RATE_LIMIT_COOLDOWN", "0")
+	if got := rateLimitCooldown(); got != defaultRateLimitCooldown {
+		t.Fatalf("zero rate-limit cooldown = %s, want default %s", got, defaultRateLimitCooldown)
+	}
+	t.Setenv("P115_RATE_LIMIT_COOLDOWN", "-5s")
+	if got := rateLimitCooldown(); got != defaultRateLimitCooldown {
+		t.Fatalf("negative rate-limit cooldown = %s, want default %s", got, defaultRateLimitCooldown)
+	}
+	t.Setenv("P115_RATE_LIMIT_COOLDOWN", "20s")
+	if got := rateLimitCooldown(); got != 20*time.Second {
+		t.Fatalf("valid rate-limit cooldown = %s, want 20s", got)
+	}
+
+	t.Setenv("P115_RISK_CONTROL_COOLDOWN", "0s")
+	if got := riskControlCooldown(); got != defaultRiskControlCooldown {
+		t.Fatalf("zero risk-control cooldown = %s, want default %s", got, defaultRiskControlCooldown)
+	}
+	t.Setenv("P115_RISK_CONTROL_COOLDOWN", "-1m")
+	if got := riskControlCooldown(); got != defaultRiskControlCooldown {
+		t.Fatalf("negative risk-control cooldown = %s, want default %s", got, defaultRiskControlCooldown)
+	}
+	t.Setenv("P115_RISK_CONTROL_COOLDOWN", "45s")
+	if got := riskControlCooldown(); got != 45*time.Second {
+		t.Fatalf("valid risk-control cooldown = %s, want 45s", got)
+	}
+}
+
 func TestServiceReportRuntimeHealthRejectsInvalidOrStaleUpdate(t *testing.T) {
 	service := newServiceWithDependencies(&runtimeHealthStore{}, fakeCredentialCipher{})
 	if err := service.ReportRuntimeHealth(context.Background(), ActiveAccountCredential{}, RuntimeHealthSucceeded); !errors.Is(err, ErrRuntimeStateChanged) {
