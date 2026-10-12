@@ -168,20 +168,30 @@ Go 统一入口仍会在日志初始化前加载 `EMBER_DOTENV` 指定文件；�
 | `TURNSTILE_SECRET_KEY` | 是 | 登录 Turnstile 服务端校验密钥 | 仅启用 Turnstile 登录校验时需要，且不应进入设置中心 |
 | `EMBY_WEBHOOK_TOKEN` | 是 | Emby Webhook token | 仅启用 Emby Webhook 回写追剧日历时需要，且只能走环境变量 |
 
-### 3.2 仍是环境变量来源，但不放进 `.env.example` 的项
+### 3.2 `infrastructure/docker/.env.example` 可选覆盖
 
-这些值仍然可能由部署环境控制，但不是“默认必须写进示例文件”的项。
+这些项不是 API 启动硬依赖，因此不写入 `services/api/.env.example`。官方 Compose 会同时注入 `ember-api` 与 `ember-gateway`，并在 `infrastructure/docker/.env.example` 以注释列出可选覆盖。
 
 | 配置项 | 敏感 | 说明 | 原因 |
 |--------|------|------|------|
-| `PORT` | 否 | API 监听端口 | 有默认值 `8080`，属于进程启动参数 |
 | `P115_DATA_PLANE_RPS` | 否 | 115 Cookie/Web 数据面每账号令牌桶速率；默认 `2`，`0` 关闭等待；必须为有限值且 `>=0.01`，`Inf`/`NaN`/过小/负数/负零（`-0`）或非法值保留默认 | 保守默认，仅部署覆盖 |
 | `P115_DATA_PLANE_BURST` | 否 | 115 数据面每账号突发容量；默认 `4`；`<=0` 或非法值保留默认，不把 `0` 改写成 `1` | 与 RPS 配套的进程内限流 |
 | `P115_DATA_PLANE_MAX_WAIT` | 否 | 本地限流最长等待；默认 `2s`。入队时理论等待超过即拒绝；已入队请求也监听该截止时间，令牌计时器晚触发时到期出队。均为 `ErrDataPlaneQueueLimited`，不回写 `provider_rate_limited` 冷却。必须为正，`0`/负值/非法值保留默认 | 避免播放请求无限排队 |
 | `P115_RATE_LIMIT_COOLDOWN` | 否 | 115 `429` 账号冷却；默认 `15s`；`<=0` 或非法值保留默认 | 短暂冷却，不停用账号 |
 | `P115_RISK_CONTROL_COOLDOWN` | 否 | 已验证结构化风控错误码的账号冷却；默认 `30s`；`<=0` 或非法值保留默认。裸 HTTP `403` 不是触发源，待真实证据接入 | 哨兵保留，当前无 HTTP 触发 |
 
-官方 Compose 会把上述 5 项同时注入 `ember-api` 与 `ember-gateway`；`infrastructure/docker/.env.example` 以注释列出可选覆盖。它们不是启动硬依赖，因此不写入 `services/api/.env.example`。
+说明：
+
+- 留空则使用进程内默认值；Compose 只是把覆盖值同时注入两个进程。
+- 它们不是启动硬依赖，未出现在 `services/api/.env.example`。
+
+### 3.3 仍是环境变量来源，但不放进 `services/api/.env.example` 的项
+
+这些值仍然可能由部署环境控制，但不是 API 示例文件的启动硬依赖。`ADMIN_USERNAME` / `ADMIN_PASSWORD` 会出现在 `infrastructure/docker/.env.example`，仅用于 users 表为空时的首次初始化。
+
+| 配置项 | 敏感 | 说明 | 原因 |
+|--------|------|------|------|
+| `PORT` | 否 | API 监听端口 | 有默认值 `8080`，属于进程启动参数 |
 | `ADMIN_USERNAME` | 否 | 首次初始化管理员用户名 | 仅首次启动且需要初始化管理员时才有意义 |
 | `ADMIN_PASSWORD` | 是 | 首次初始化管理员密码 | 仅首次启动且需要初始化管理员时才有意义 |
 
@@ -191,7 +201,7 @@ Go 统一入口仍会在日志初始化前加载 `EMBER_DOTENV` 指定文件；�
 - `CONFIG_ENCRYPTION_KEY` 不作为客户端认证凭证；它负责数据库敏感配置与 `p115_accounts.cookie_ciphertext` 的加解密，并分别按 `emby-access-token`、`p115-playback-account-key`、`p115-playback-session-fingerprint` purpose 派生隔离 HMAC 密钥。
 - `EMBY_URL`、`EMBY_API_KEY`、`TMDB_API_KEY`、`MOVIEPILOT_*`、`SMTP_*`、`CRON_*`、`BOT_NOTIFY_URL`、`TELEGRAM_ADMIN_CHAT_ID`、`TELEGRAM_GROUP_CHAT_ID` 已按设置中心模型管理，不再作为 API `.env.example` 的默认项。
 
-### 3.3 Gateway 部署变量
+### 3.4 Gateway 部署变量
 
 | 配置项 | 敏感 | 说明 |
 |--------|------|------|
