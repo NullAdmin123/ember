@@ -119,10 +119,15 @@ func TestServiceValidatePersistsRejectedAndUnavailableStates(t *testing.T) {
 		wantEnabled bool
 		wantValid   bool
 		wantErr     error
+		wantCode    string
 	}{
 		{name: "rejected", providerErr: p115integration.ErrCredentialRejected, wantStatus: models.P115AccountStatusExpired, wantEnabled: false, wantValid: false},
-		{name: "unavailable", providerErr: p115integration.ErrProviderUnavailable, wantStatus: models.P115AccountStatusError, wantEnabled: true, wantErr: p115integration.ErrProviderUnavailable},
-		{name: "protocol", providerErr: p115integration.ErrProviderProtocol, wantStatus: models.P115AccountStatusError, wantEnabled: true, wantErr: p115integration.ErrProviderProtocol},
+		{name: "unavailable", providerErr: p115integration.ErrProviderUnavailable, wantStatus: models.P115AccountStatusError, wantEnabled: true, wantErr: p115integration.ErrProviderUnavailable, wantCode: "provider_unavailable"},
+		{name: "protocol", providerErr: p115integration.ErrProviderProtocol, wantStatus: models.P115AccountStatusError, wantEnabled: true, wantErr: p115integration.ErrProviderProtocol, wantCode: "provider_protocol_error"},
+		{name: "rate limited", providerErr: p115integration.ErrProviderRateLimited, wantStatus: models.P115AccountStatusError, wantEnabled: true, wantErr: p115integration.ErrProviderRateLimited, wantCode: "provider_rate_limited"},
+		{name: "risk control", providerErr: p115integration.ErrProviderRiskControl, wantStatus: models.P115AccountStatusError, wantEnabled: true, wantErr: p115integration.ErrProviderRiskControl, wantCode: "provider_risk_control"},
+		{name: "local queue", providerErr: p115integration.ErrDataPlaneQueueLimited, wantStatus: models.P115AccountStatusError, wantEnabled: true, wantErr: p115integration.ErrProviderUnavailable, wantCode: "provider_unavailable"},
+		{name: "source timeout", providerErr: p115integration.ErrSourceDirectoryTimeout, wantStatus: models.P115AccountStatusError, wantEnabled: true, wantErr: p115integration.ErrProviderUnavailable, wantCode: "provider_unavailable"},
 	}
 
 	for _, tt := range tests {
@@ -146,6 +151,15 @@ func TestServiceValidatePersistsRejectedAndUnavailableStates(t *testing.T) {
 			}
 			if store.accounts["account_1"].Enabled != tt.wantEnabled {
 				t.Fatalf("stored enabled = %t, want %t", store.accounts["account_1"].Enabled, tt.wantEnabled)
+			}
+			if tt.wantCode != "" {
+				gotCode := ""
+				if store.accounts["account_1"].LastErrorCode != nil {
+					gotCode = *store.accounts["account_1"].LastErrorCode
+				}
+				if gotCode != tt.wantCode {
+					t.Fatalf("stored lastErrorCode = %q, want %q", gotCode, tt.wantCode)
+				}
 			}
 			if tt.wantErr == nil && (result == nil || result.Valid != tt.wantValid) {
 				t.Fatalf("unexpected validation result: %+v", result)

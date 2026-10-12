@@ -148,6 +148,24 @@ func TestCookieHTTPAdapterDeleteFileCancelsWhileWaitingForAccountLock(t *testing
 	}
 }
 
+func TestCookieHTTPAdapterDeleteFileUsesDataPlaneLimiter(t *testing.T) {
+	var calls atomic.Int32
+	adapter := newDeleteTestAdapter(t, httpDoerFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return jsonHTTPResponse(http.StatusOK, `{"state":true}`), nil
+	}))
+	adapter.limiter = newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: time.Millisecond})
+	if err := adapter.DeleteFile(context.Background(), fixtureCredential(), "789"); err != nil {
+		t.Fatalf("first DeleteFile() error = %v", err)
+	}
+	if err := adapter.DeleteFile(context.Background(), fixtureCredential(), "790"); !errors.Is(err, ErrDataPlaneQueueLimited) {
+		t.Fatalf("second DeleteFile() error = %v, want local queue limit", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("rate-limited DeleteFile reached 115: calls=%d", calls.Load())
+	}
+}
+
 func TestCookieHTTPAdapterDeleteFileRejectsInvalidIDBeforeHTTP(t *testing.T) {
 	var calls atomic.Int32
 	adapter := newDeleteTestAdapter(t, httpDoerFunc(func(*http.Request) (*http.Response, error) {
@@ -171,6 +189,8 @@ func TestCookieHTTPAdapterDeleteFileMapsSafeProviderFailures(t *testing.T) {
 		body       string
 		wantErr    error
 	}{
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, body: "cookie-secret", wantErr: ErrProviderRateLimited},
+		{name: "forbidden", statusCode: http.StatusForbidden, body: "cookie-secret", wantErr: ErrProviderUnavailable},
 		{name: "http status", statusCode: http.StatusServiceUnavailable, body: "cookie-secret", wantErr: ErrProviderUnavailable},
 		{name: "invalid json", statusCode: http.StatusOK, body: `{"state":`, wantErr: ErrProviderProtocol},
 		{name: "missing state", statusCode: http.StatusOK, body: `{}`, wantErr: ErrProviderProtocol},

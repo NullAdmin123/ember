@@ -84,7 +84,14 @@ var (
 	ErrInvalidRequest          = errors.New("p115 provider request invalid")
 	ErrProviderRejected        = errors.New("p115 provider rejected request")
 	ErrProviderUnavailable     = errors.New("p115 provider unavailable")
+	ErrProviderRateLimited     = errors.New("p115 provider rate limited")
+	// ErrProviderRiskControl is reserved until a verified 115 structured
+	// risk-control code exists. Bare HTTP 403 must not produce it.
+	ErrProviderRiskControl = errors.New("p115 provider risk control")
+	// ErrDataPlaneQueueLimited is a local MaxWait reject and is not upstream 429.
+	ErrDataPlaneQueueLimited   = errors.New("p115 data-plane queue limited")
 	ErrProviderProtocol        = errors.New("p115 provider protocol error")
+	ErrSourceDirectoryTimeout  = errors.New("p115 source directory resolve budget exceeded")
 	ErrSourceDirectoryTooLarge = errors.New("p115 source directory exceeds resolve limit")
 	ErrSourceFileAmbiguous     = errors.New("p115 source file match is ambiguous")
 	ErrSourceFileNotFound      = errors.New("p115 source file not found")

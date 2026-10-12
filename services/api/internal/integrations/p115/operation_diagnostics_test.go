@@ -97,6 +97,11 @@ func TestDownloadPolicyDiagnosticDoesNotLeakTarget(t *testing.T) {
 		{&DownloadURLPolicyError{Reason: "fixture-secret", Host: "fixture-secret"}, "download_policy_rejected"},
 		{ErrDownloadURLExpired, "download_url_expired"},
 		{ErrDownloadURLIncompatible, "download_headers_incompatible"},
+		{ErrDataPlaneQueueLimited, "data_plane_queue_limited"},
+		{ErrProviderRateLimited, "provider_rate_limited"},
+		{ErrProviderRiskControl, "provider_risk_control"},
+		{ErrSourceDirectoryTimeout, "source_directory_timeout"},
+		{ErrProviderUnavailable, "provider_unavailable"},
 	} {
 		_, o := observeOperation(context.Background(), "download_url")
 		err := o.finish(test.err)

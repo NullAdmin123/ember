@@ -14,6 +14,8 @@ import (
 const (
 	validationCodeRejected    = "credential_rejected"
 	validationCodeUnavailable = "provider_unavailable"
+	validationCodeRateLimited = "provider_rate_limited"
+	validationCodeRiskControl = "provider_risk_control"
 	validationCodeProtocol    = "provider_protocol_error"
 )
 
@@ -76,14 +78,30 @@ func (s *Service) validateAccount(ctx context.Context, account *models.P115Accou
 	return &ValidationResult{Valid: true, Account: accountSummary(updated)}, nil
 }
 
+// completeValidationError persists a non-reject validation failure on the
+// current Cookie generation. Rate-limit and reserved risk-control sentinels
+// keep distinct last_error_code values; local queue and source-path budget
+// stay generic unavailable. Public errors stay bounded Provider sentinels.
 func (s *Service) completeValidationError(ctx context.Context, account *models.P115Account, validationErr error, validatedAt time.Time) (*ValidationResult, error) {
 	code := validationCodeUnavailable
 	message := "115 服务暂不可用"
 	publicErr := p115integration.ErrProviderUnavailable
-	if errors.Is(validationErr, p115integration.ErrProviderProtocol) {
+	switch {
+	case errors.Is(validationErr, p115integration.ErrProviderProtocol):
 		code = validationCodeProtocol
 		message = "115 响应格式不兼容"
 		publicErr = p115integration.ErrProviderProtocol
+	case errors.Is(validationErr, p115integration.ErrProviderRateLimited):
+		code = validationCodeRateLimited
+		message = "115 接口限流"
+		publicErr = p115integration.ErrProviderRateLimited
+	case errors.Is(validationErr, p115integration.ErrProviderRiskControl):
+		code = validationCodeRiskControl
+		message = "115 账号风控"
+		publicErr = p115integration.ErrProviderRiskControl
+	case errors.Is(validationErr, p115integration.ErrDataPlaneQueueLimited),
+		errors.Is(validationErr, p115integration.ErrSourceDirectoryTimeout):
+		// Local pacing or source-path budget are not validation outcomes.
 	}
 	if account.CookieCiphertext == nil {
 		return nil, ErrAccountUnavailable

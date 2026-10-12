@@ -223,11 +223,11 @@ stateDiagram-v2
     cooling_down --> pending: 替换 Cookie
 ```
 
-`enabled` 是独立布尔轴：`active` 不等于已启用。显式验证或播放调用确认 Cookie 失效时会进入 `expired + disabled`；显式验证的网络/协议错误进入 `error` 并保留 enabled。播放期间临时 Provider 故障进入固定 1 分钟 `cooling_down`，未到期时不读取 Cookie；到期后 PostgreSQL 行锁只发放一个 1 分钟半开探测租约，成功恢复 `active`，失败重新冷却。播放协议错误进入 `error`。路由和目录保存使用独立 `config_version`，健康成功不再使其他请求的配置快照失效；Cookie、显式验证、启停、目录/并发和解绑会推进配置版本。运行期回写同时匹配加载凭证时的 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的结果。
+`enabled` 是独立布尔轴：`active` 不等于已启用。显式验证或播放调用确认 Cookie 失效时会进入 `expired + disabled`；显式验证的网络/协议错误进入 `error` 并保留 enabled。播放期间临时 Provider 故障进入默认 1 分钟 `cooling_down`，限流 / 风控分别默认 15 秒 / 30 秒；未到期时不读取 Cookie；到期后 PostgreSQL 行锁只发放一个 1 分钟半开探测租约，成功恢复 `active`，失败按错误类型重新冷却。播放协议错误进入 `error`。路由和目录保存使用独立 `config_version`，健康成功不再使其他请求的配置快照失效；Cookie、显式验证、启停、目录/并发和解绑会推进配置版本。运行期回写同时匹配加载凭证时的 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的结果。
 
 source 的路径解析及媒体身份校验成功，即构成真实源健康观察。后续目标查询、起播许可、配额或存储拒绝不应让 source 继续停在半开冷却；源健康在本次源调用结束后独立结算，若后续源 preID/challenge 明确凭证失效或 Provider 临时不可用则不报告成功；业务拒绝、Range 协议不匹配和无效 hash 按文件请求隔离，不把整个源账号置为 error，任务失败落库异常也不能掩盖源失败。继续使用原凭证快照 CAS，较新的故障、停用和 Cookie 替换不能被旧成功覆盖。playback 仍以真实下载接口成功作为恢复证据。
 
-DirectPlay 对源路径查询、每次 preID/challenge 源片段读取各设置 5 秒只读预算。超预算主动取消并以 `source_read_timeout` 回退，未开始的秒传不再执行；已开始的 retained 写入不受这一只读预算中断。主动取消本身不写账号故障；没有有效源身份时也不伪造恢复成功，既有半开探测租约保留原到期规则。该预算不限制 Emby 回退耗时，客户端实际起播仍需线上验证。
+DirectPlay 对源路径查询设置 30 秒只读预算，与 Adapter 目录 flight / 分页上限对齐；每次 preID/challenge 源片段读取仍是 5 秒。超预算主动取消并以 `source_read_timeout` 回退，大目录超时不写账号健康，未开始的秒传不再执行；已开始的 retained 写入不受这一只读预算中断。主动取消本身不写账号故障；没有有效源身份时也不伪造恢复成功，既有半开探测租约保留原到期规则。该预算不限制 Emby 回退耗时，客户端实际起播仍需线上验证。
 
 持续健康账号复用凭证读取快照，对 1 分钟内的干净成功跳过健康 SQL；错误、恢复和配置修改后的首次成功仍立即尝试条件写入。采样观察不会推进健康版本或清除新错误。保留文件复用的访问时间使用单条条件 UPDATE，先确定最近 succeeded 任务，再按 1 分钟窗口更新；旧请求不回退时间，窗口内及外部预存文件均允许零行更新。这两个时间是观察采样，不是逐次播放审计或活跃会话真相。
 
@@ -389,7 +389,7 @@ flowchart TD
 
 媒体解析与最终直链使用两层进程内缓存。媒体键按同一 Server/用户/登录映射/设备/媒体路径/真实 UA、两类账号配置与凭证、源/目标目录隔离，不包含 PlaySessionId；退出重播与新会话可命中，Stopped 释放租约并撤销当时对应的起播许可，不清媒体缓存。每个请求仍实时执行身份/证明、账号/套餐、Redis 准入与最终确认。媒体命中跳过源解析和目标查重，引用既有直链条目，返回 preexisting=true，不复用任务 ID 或转存用量；访问记录继续采样，双方账号都不写虚构的健康成功。未命中才进入下文完整查询/转存流程。
 
-媒体缓存最多 1024 条，满时淘汰最早到期项；跨会话新鲜度截止于文件解析开始后 10 分钟与原直链缓存截止时间的较早值；同一仍 active/paused 的原播放会话可继续复用至直链安全截止时间。直链缓存仍为最多 1024 条 LRU、每条 URL 最大 16 KiB，截止于链接到期前 10 秒，不再附加本地 10 分钟上限。两层命中都不续期，不落 Redis/数据库；URL 淘汰或到期令媒体引用失效，时钟回退丢弃条目。跨会话最多延迟该短窗口后发现同路径文件变动；持续播放允许保持已验证文件身份至链接安全期限；配置/凭证变更隔离旧条目，任一账号恢复探测绕过媒体缓存。跨 session 同键昂贵处理串行，获锁后加载账号快照，错误/取消/最终租约确认失败不填媒体缓存。单条决策日志包含 mediaResolutionCache 和 downloadURLCache 的 hit/miss/bypass；媒体命中时没有源解析/查重/取链调用计数。具体合同见 [Cookie 合同 §9.1](./p115-cookie-playback-contract.md#91-同设备短期直链缓存ember-内部合同)。
+媒体缓存最多 1024 条，满时淘汰最早到期项；跨会话新鲜度截止于文件解析开始后 10 分钟与原直链缓存截止时间的较早值；同一仍 active/paused 的原播放会话可继续复用至直链安全截止时间。直链缓存仍为最多 1024 条 LRU、每条 URL 最大 16 KiB，截止于 `ExpiresAt - min(5m, 剩余寿命 10%)`，不再附加本地 10 分钟上限，也不再用固定 10 秒窗口。两层命中都不续期，不落 Redis/数据库；URL 淘汰或到期令媒体引用失效，时钟回退丢弃条目。跨会话最多延迟该短窗口后发现同路径文件变动；持续播放允许保持已验证文件身份至链接安全期限；配置/凭证变更隔离旧条目，任一账号恢复探测绕过媒体缓存。跨 session 同键昂贵处理串行，获锁后加载账号快照，错误/取消/最终租约确认失败不填媒体缓存。单条决策日志包含 mediaResolutionCache 和 downloadURLCache 的 hit/miss/bypass；媒体命中时没有源解析/查重/取链调用计数。具体合同见 [Cookie 合同 §9.1](./p115-cookie-playback-contract.md#91-同设备短期直链缓存ember-内部合同)。
 
 单 Gateway 按同 session 串行执行候选、续租与清理；排队及主处理共用 2 分钟预算。GET 新建/复用 reservation 时刷新 30 秒有效期，处理期间每 10 秒续租，返回前原子确认并续租；HEAD 准入通过一次原子查询同时读取租约和账号/用户用量，返回前再次确认，但不创建或延长租约。active/paused 的到期仍只由播放事件管理。租约丢失/过期/Stopped 时不重新创建，固定 `playback_lease_lost` 回退；内部主处理预算耗尽为 `playback_resolve_timeout` 回退。客户端自己的取消/超时仍为 `499/504`，内部预算和续租错误不污染账号健康。所有后台续租都在请求收尾时停止并等待退出，之后才清理本次新建预留并放行下一请求。
 
@@ -399,7 +399,7 @@ HLS/DASH manifest、转码分片、不完整参数、未映射路径、账号不
 
 ## 7. DirectPlay 保留式秒传
 
-源目录解析在 Cookie Adapter 内合并时间重叠的相同账号、精确凭证和父目录请求，多个文件共享一次路径解析与完整分页，再分别校验文件名唯一性。完成即移除，不缓存后续播放；等待者独立取消，全部离开取消上游，总预算 30 秒耗尽按 Provider unavailable 处理。该优化位于用户/账号/Redis 准入之后，不共享目标查重、转存记账或最终直链；详细隔离、日志及中间目录重名未验证边界见 [115 Cookie 合同](./p115-cookie-playback-contract.md#521-源文件路径解析)。
+源目录解析在 Cookie Adapter 内合并时间重叠的相同账号、精确凭证和父目录请求，多个文件共享一次路径解析与完整分页，再分别校验文件名唯一性。完成即移除，不缓存后续播放；等待者独立取消，全部离开取消上游，总预算 30 秒耗尽映射目录超时并以 `source_read_timeout` 回退，不回写账号健康。该优化位于用户/账号/Redis 准入之后，不共享目标查重、转存记账或最终直链；详细隔离、日志及中间目录重名未验证边界见 [115 Cookie 合同](./p115-cookie-playback-contract.md#521-源文件路径解析)。
 
 以下序列图描述媒体缓存未命中时的完整路径；媒体命中直接复用已验证结果并采样访问记录，跳过 Provider/transfer 步骤，再执行最终租约确认。
 
@@ -508,7 +508,7 @@ stateDiagram-v2
 
 - 只允许 playback 账号的直链成为客户端 `Location`。
 - source 下载 URL 只允许在 Provider 内执行 preID/challenge Range。
-- 候选必须是 HTTPS、允许的 hostname、未过期、并发信息有效，并且 HeaderMode 只允许 `none` 或 `same_user_agent`。
+- 候选必须是 HTTPS、允许的 hostname、未过期、并发信息有效（`c=0` 表示 115 CDN 无限打开，不改 Ember Redis 路数），并且 HeaderMode 只允许 `none` 或 `same_user_agent`。
 - `same_user_agent_and_cookie` 首期不兼容，不能向播放器泄露 playback Cookie。
 
 ### 8.2 fallback
@@ -638,7 +638,7 @@ Debug 请求摘要记录有界 method/Host/原始 request path、query key、rou
 
 #### 【P2-1，已关闭】播放运行期已回写账号失效、冷却和成功状态
 
-- 关闭实现：`directplay.Service` 通过窄 `AccountHealthReporter` 只回传实际调用账号和四种固定结果；成功按 1 分钟采样更新 source/playback `lastSucceededAt`（首次及恢复立即写入），凭证失效进入 `expired + disabled`，临时不可用进入 1 分钟 `cooling_down`，协议错误进入 `error`。
+- 关闭实现：`directplay.Service` 通过窄 `AccountHealthReporter` 只回传实际调用账号和六种固定结果；成功按 1 分钟采样更新 source/playback `lastSucceededAt`（首次及恢复立即写入），凭证失效进入 `expired + disabled`，临时不可用进入 1 分钟 `cooling_down`，真实 115 `429` 短暂限流冷却，风控哨兵保留但裸 HTTP `403` 按临时不可用处理，协议错误进入 `error`。本地 `MaxWait` 拒绝（入队估计或实际排队到期）不回写健康。
 - 并发边界：冷却期间不读取 Cookie；到期后 `AcquireRuntimeByRole` 在 PostgreSQL 行锁内续租并只放行一个半开探测。回写同时匹配 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的健康结果。
 - 失败边界：请求取消和文件级错误不改变账号状态；源路径解析的业务拒绝、响应协议异常和无效文件身份也属于请求级失败，不把源账号置为 `error`。明确凭证失效/临时不可用和其他 Provider 操作的健康处理保持原合同。健康回写使用独立 2 秒上限，失败不改写原始 302/fallback 结果。
 - 验证证据：Go 单元/race 与独立 PostgreSQL schema 已覆盖四类映射、冷却阻断、过期冷却并发单探测、成功恢复、凭证失效停用和旧 Cookie 结果丢弃；没有请求真实 115，生产自然故障的冷却时长仍待观察。

@@ -192,7 +192,7 @@ Emby `PlaybackInfo` 提供媒体源 `Path` 和可能缺失或不可靠的 `Size`
 
 - 同一个 Cookie Adapter 内，相同账号 ID、精确 Cookie、AppType、Provider UA、规范化 root ID 和相对父目录共享正在进行的“父目录解析 + 完整分页”；不同文件名各自做唯一性匹配，根目录文件也共享目录读取。合并键使用长度分隔字段的 SHA256 摘要，不保存明文 Cookie，也不输出摘要。
 - 只合并时间重叠的调用；成功或失败完成后立即移除，不缓存完整文件身份或目录快照，不跨进程共享。顺序播放、下一集或后续重试仍重新访问 Provider；每个调用者返回独立 File 值。
-- 每个等待者独立响应取消或 deadline；最后一个等待者离开时取消上游请求并移除任务。旧任务稍后结束不能删除同键的新任务。共享读取从创建起固定最多 `30s`，包含父目录解析与全部分页；这个 Provider 预算耗尽映射 `ErrProviderUnavailable`，不冒充客户端 deadline。每个 HTTP 请求仍使用既有 `10s` 上限。
+- 每个等待者独立响应取消或 deadline；最后一个等待者离开时取消上游请求并移除任务。旧任务稍后结束不能删除同键的新任务。共享读取从创建起固定最多 `30s`，包含父目录解析与全部分页；DirectPlay 必须给 `ResolveFileByPath` 同样的 30s 预算。该预算耗尽映射 `ErrSourceDirectoryTimeout`，Gateway 按 `source_read_timeout` 回退 Emby，不回写账号健康，也不冒充客户端 deadline 或 Provider 宕机。每个 HTTP 请求仍使用既有 `10s` 上限。
 - 用户资格、账号健康、租约/转存配额和最终下载 URL 不在共享范围内；仍由各自调用链检查。Debug 每次共享读取结束只记录一条 `source_directory_resolved`，包含 shared、callers、entries、parentResolveMs、listMs、listPages、durationMs、success；listPages 统计实际尝试页数（含失败页），不记录凭证、路径、Provider ID、摘要或响应体。DirectPlay 各调用者另在 Gateway 最终决策日志携带自身等待源解析及后续各阶段的耗时，不把共享工作时间重复累加。
 - **中间目录重名仍未收口**：路径接口只返回一个 ID，现有证据不能证明其会拒绝同名中间目录；最终文件唯一性不等于完整路径唯一性。并发合并不恢复旧逐层歧义检查。后续必须用固定协议证据或明确授权的只读验证确认；若不能保证唯一性，再单独评估逐层校验的请求成本。目标账号的非零 `parent_id`、不存在目录、重名目录和真实耗时仍未证实。
 
@@ -363,6 +363,7 @@ Cookie: <playback-account-cookie>
 - 只接受 HTTP `2xx` 和顶层布尔 `state=true`；`state=false` 映射为 `ErrProviderRejected`，网络/HTTP/JSON/超限错误沿用脱敏 Provider 错误边界。
 - 串行键使用 Cookie 规范化后的 Provider UID，不使用 Ember 账号记录 ID；同一真实 115 账号即使被不同记录引用，也不会在同一进程内并发删除。
 - 同一 UID 的等待支持 context 取消，取消的 waiter 不发送 HTTP；不同 Provider UID 不互相阻塞。
+- 真正发出删除 HTTP 前走同一账号 Cookie/Web 数据面 FIFO 限流；本地 `MaxWait` 拒绝不发送删除请求。CDN Range 读取不取令牌。
 - 锁注册表由进程内所有 `CookieHTTPAdapter` 共享并在无持有者/等待者时清理。未来播放网关多实例部署时，业务层必须再使用数据库任务所有权和 advisory lock 或等价分布式互斥，不能把进程内锁误当成全局锁。
 
 Adapter 不判断一个文件是否应当删除。第二阶段若启用容量回收，业务层必须重新核对成功任务归属、播放账号、目标 parent、file ID、SHA1、size、最后访问时间、保留策略和活跃会话；任一不一致都不得调用删除端点。
@@ -433,7 +434,7 @@ SHA1 + size + isDirectory=false
 - 生产日志先出现父目录解析约 10 秒失败，后又出现目录解析成功、起播许可继承通过，但 `hash_source_preid` 在约 1.21 秒失败。现有样本无法确定后者是直链响应解析、解密还是 Range 校验失败，不把任一假设当作协议事实。
 - Debug `provider_operation_completed` 区分 `source_parent/source_list/download_url/source_range/cookie_get`，记录固定 reason、数值 HTTP 状态、networkPhase、DNS/连接/TLS/首字节与总耗时；复用连接的前几项可以为零，source_range 的总耗时包含先取得下载 URL。HTTP trace 字段不携带域名、IP、URL、Cookie 或原始响应。
 - 失败元数据沿 Provider → DirectPlay → Gateway 传递，最终决策增加 `providerStage/providerReason/providerHTTPStatus`；嵌套直链失败保留 download_url 阶段，不误报为 CDN Range 失败。无精确细分的外部错误使用固定兜底原因，不输出原始错误。
-- DirectPlay 源路径读取及每次 preID/challenge 读取各设 5 秒预算，包含后者获取直链和 Range 两步。主动预算耗尽记 `source_read_timeout`，与真实网络错误分开，不污染账号健康。共享目录的 30 秒总预算、单 HTTP 10 秒底层上限仍保留；最后一个等待者退出会取消共享请求。
+- DirectPlay 源路径读取（`ResolveFileByPath`）使用与共享目录 flight 对齐的 30 秒预算。每次 preID/challenge 的源片段（获取直链 + Range）仍各为 5 秒。主动预算耗尽记 `source_read_timeout`，与真实网络错误分开，不污染账号健康。共享目录的 30 秒总预算、单 HTTP 10 秒底层上限仍保留；最后一个等待者退出会取消共享请求。
 - 不放宽 Range 的状态、范围、编码、长度校验，不自动重试 retained 写入，不把未经验证的外部响应当成功。真实 115 故障根因仍需要部署后细分日志确认；本次验证依赖 mock 和 PostgreSQL 隔离集成。
 
 ## 8. 秒传状态机
@@ -490,7 +491,7 @@ playbackAccountId + SHA1 + size
 - 获取最终直链时使用真实客户端 User-Agent；直链缓存至少按 `accountId + pickCode + UA` 隔离。
 - 只有实测证明存在 IP 绑定后，才把客户端 IP 纳入缓存键；不得凭经验增加。
 - 缓存有效期不得超过链接参数 `t`，并预留安全窗口。
-- `Location` 必须匹配配置的 115/CDN 域名 allowlist，禁止开放重定向。
+- `Location` 必须匹配配置的 115/CDN 域名 allowlist，禁止开放重定向。Gateway 最终 302 与直链缓存命中复用 `IsAllowedDownloadHost` 同一边界，不放宽 `*.115cdn.net`。
 - 源账号用于 Range challenge 的直链永远不能返回给客户端。
 - `f=3` 或其他需要额外 Cookie 的链接，在证明 Infuse 能自然满足前按不兼容处理。
 - 不兼容、凭证失效或 Provider 不可用时向 Gateway 返回类型化内部错误，禁止改用 source 账号；Gateway 不签发 302，记录脱敏 fallback 原因并透明转发原始 Emby 视频请求。
@@ -501,7 +502,7 @@ playbackAccountId + SHA1 + size
 - 媒体键对 Server、用户、登录映射、设备、原始媒体路径、真实播放器 UA、源和 playback 账号 ID/Provider 身份/干净 active 配置版本/精确凭证/Provider 参数、源挂载前缀/root 和目标目录做长度编码摘要；不含 PlaySessionId，也不按会话过期或 Stopped 清除。媒体条目仅保存源内容 SHA1/size、原播放会话身份和直链缓存引用，最多 1024 条，容量满时淘汰最早到期项。
 - 跨会话媒体新鲜度截止于 `min(本次文件解析开始时间 + 10m, 引用直链缓存的原始截止时间)`；条目最多保留至引用直链原期限。超过新鲜度后，仅实时租约准入确认 active/paused、且 PlaySessionId 与该条目原会话一致时允许继续复用；其他会话、reservation、过期或停止会话必须重新验证文件身份。直链过期或被淘汰同样视为未命中；时钟回退丢弃条目。持续播放允许保留当前已验证文件身份至链接安全截止时间，跨会话仍最多延迟 10 分钟发现外部同路径替换/删除。不得用媒体重新填充延长原直链期限；媒体内容身份只在进程内使用，不输出日志或落库。
 - 缓存键对 Server、用户、登录映射、设备、playback 账号 ID/干净 active 配置版本、凭证及 Provider 参数、目标目录/文件 ID/pickCode/SHA1/size、真实播放器 UA 做长度编码后摘要；不保存原始 Cookie，不含 `PlaySessionId`，不跨设备或登录复用。摘要只在进程内使用，不输出日志。
-- 进程内 LRU 最多 1024 条，每条 URL 最多 16 KiB；缓存截至 `ExpiresAt - 10s`，不再附加获取后 10 分钟上限，命中不续期，过期惰性删除并按容量淘汰，无后台刷新。时钟回退到写入之前时丢弃条目。URL 不进入 Redis、数据库、API 或日志。
+- 进程内 LRU 最多 1024 条，每条 URL 最多 16 KiB；缓存截至 `ExpiresAt - min(5m, 剩余寿命 10%)`，不再附加获取后 10 分钟上限，也不再用固定 10s 窗口把短寿命链接整段禁用。命中不续期，过期惰性删除并按容量淘汰，无后台刷新。写入与命中都复用既有 115 hostname allowlist，不放宽。时钟回退到写入之前时丢弃条目。URL 不进入 Redis、数据库、API 或日志。
 - 同一键的取链串行，等待者可独立取消；持有者取消或调用失败不填缓存，后续请求可重新获取。不缓存错误、额外 Cookie 链接、无效结果或已进入安全窗口的地址，不以过期地址兜底。
 - 每个请求独立执行 Redis 准入和最终确认；HEAD 无租约仍 fallback，缓存不能绕过停用、冷却、解绑或配额状态。相同用户/登录/设备/媒体路径/UA 的昂贵处理跨 session 串行，获锁后加载账号快照，等待者独立取消。只有完整成功且最终租约确认通过后才发布媒体条目；新转存强制清除旧直链并重新获取。媒体命中返回 `preexisting=true`，不复制旧任务 ID、首次创建标记或转存用量；仍调用既有成功访问采样，不再次消耗转存额度。
 - 账号凭证加载暴露非持久化 `DownloadCacheVersion`：仅干净 active 状态为正数；任一账号冷却探测/错误恢复或未知版本为零时绕过媒体缓存，执行真实文件查询。playback 探测同时绕过直链缓存并实际取链。媒体命中不回写任一账号健康成功；只命中直链缓存时，真实源解析成功仍按原规则采样。
@@ -516,11 +517,13 @@ playbackAccountId + SHA1 + size
 - 第一阶段不承诺自动控制 playback 容量，管理员通过专用目录观察占用并手工处理；手工处理不属于 Ember 自动状态流转。
 - 第二阶段才设计自动回收。候选至少同时满足：无活跃会话、超过基于 `lastAccessedAt` 的最短保留期、容量策略要求回收、任务 provenance 完整、删除前 parent/fileId/SHA1/size 全量复核一致。
 - 第二阶段清理任务按账号串行执行，并补跨副本任务所有权/互斥；不能把 Adapter 进程内锁当成全局锁。
-- DirectPlay 当前只将 `succeeded/credential_rejected/provider_unavailable/provider_protocol` 四种固定账号级结果回写到实际调用的 source/playback 账号；Provider 原始错误和响应体不进入账号 Service。
-- `provider_unavailable` 当前按账号进入固定 1 分钟共享冷却，不让每个播放请求独立重试；冷却未到期时不读取 Cookie，到期后用 PostgreSQL 行锁续租并只放行一个半开探测，成功立即恢复 `active`，失败重新冷却。
-- `credential_rejected` 进入 `expired + disabled`，`provider_protocol` 进入 `error`；请求取消、目标文件不可见、下载 Header 不兼容等文件/请求级失败不污染账号健康。
+- DirectPlay 当前将 `succeeded/credential_rejected/provider_unavailable/provider_rate_limited/provider_risk_control/provider_protocol` 六种固定账号级结果回写到实际调用的 source/playback 账号；Provider 原始错误和响应体不进入账号 Service。
+- `provider_unavailable` 当前按账号进入默认 1 分钟共享冷却，不让每个播放请求独立重试；冷却未到期时不读取 Cookie，到期后用 PostgreSQL 行锁另延长 1 分钟半开探测租约并只放行一个探测，成功立即恢复 `active`，失败按错误类型重新冷却。
+- `provider_rate_limited` 默认冷却 15 秒，`provider_risk_control` 默认冷却 30 秒，均保留启用意图，不进入 `expired + disabled`。冷却时长可通过 `P115_RATE_LIMIT_COOLDOWN` / `P115_RISK_CONTROL_COOLDOWN` 覆盖；非正值保留默认。风控哨兵与冷却配置已保留，但真实 115 结构化风控错误码尚未实机确认，当前没有 HTTP 触发源，待真实证据接入。
+- Cookie/Web 数据面按账号做本地 FIFO 发牌限流，覆盖源列表、SHA1 查重、downurl、秒传和删除；`Burst`/`MaxWait` 必须为正，`MaxWait=0` 不表示零等待或无限排队。业务上限为 `RPS<=100`、`Burst<=1000`、`MaxWait<=1m`。`RPS=0` 关闭等待；`Inf`/`NaN`/小于 `0.01`、大于 `100`、负数与负零（`-0`/`-0.0`）以及超量 `Burst`/`MaxWait` 保留默认并写日志。115 API `429` 使用 `ErrProviderRateLimited` 并短暂冷却：HTTP 429 是 RFC 6585 / RFC 9110 的标准 Too Many Requests 语义，不是未确认的 115 专有业务码。本地等待超过 `MaxWait` 使用 `ErrDataPlaneQueueLimited`：入队时比较理论等待，入队后还监听真实截止时间，令牌计时器因暂停或锁竞争晚触发时到期安全出队；与发牌同时到期则使用已授令牌，未授牌则归还。不回写账号健康、不进入共享冷却，该请求仍回退 Emby。裸 API `403` 使用 `ErrProviderUnavailable`，与改动前把未识别状态当作通用上游故障的行为一致；文件权限、请求授权等普通 403 不得冷却整账号。`ErrProviderRiskControl` 只在已验证的结构化风控错误码出现时映射，当前无触发源。取消是从等待队列移除，不预分配或回拨未来时隙。CDN Range 读取不取令牌，也不套用该 HTTP 映射。对外仍按 Provider 不可用回退 Emby，不改变播放器可见行为。
+- `credential_rejected` 进入 `expired + disabled`，`provider_protocol` 进入 `error`；请求取消、大目录解析超时、本地数据面排队拒绝、目标文件不可见、下载 Header 不兼容等文件/请求级失败不污染账号健康。
 - 运行期回写同时匹配请求加载时的 Cookie 密文和 `updated_at`；旧请求不能覆盖 Cookie 替换、显式验证、手工启停或较新的运行期结果。健康回写失败不改变原始 302/fallback 结果。
-- Cookie 失效、账号风控、下载地址不兼容、普通上传要求和 Provider 限流必须使用不同内部错误码。
+- Cookie 失效、账号风控、下载地址不兼容、普通上传要求、本地数据面排队拒绝和 Provider 限流必须使用不同内部错误码。
 - 负缓存只能短期存在；一次搜索失败不能长期证明文件不存在。
 - 已签发的 CDN 链接无法由 Ember 保证立即失效，封禁和账号失效只能阻止新直链。
 
@@ -553,7 +556,7 @@ playbackAccountId + SHA1 + size
 
 真实验证必须由用户明确授权，使用测试账号和测试文件，并以一次性命令执行；不能启动 Ember 服务或后台进程作为验证手段。每次记录日期、平台、Infuse 当前稳定版本、脱敏请求字段和结果。
 
-仓库提供 `go -C services/api run ./cmd/p115-contract-check` 作为只读入口，具体环境变量、安全确认值、执行和清理步骤见 [115 Cookie Provider 一次性只读合同验证](../runbooks/p115-read-only-contract-check.md)。该命令使用不含 `InitRapidUpload` / `DeleteFile` 的窄接口，不连接 Ember 数据库；自动化测试只注入 fake Provider，禁止在测试中调用真实 115。URL 安全策略失败时允许额外输出类型化的 reason、scheme 和 hostname，用于根据真实证据修订 allowlist，仍禁止输出任何可复用 URL 部分。
+仓库提供 `go -C services/api run ./cmd/p115-contract-check` 作为只读入口，具体环境变量、安全确认值、执行和清理步骤见 [115 Cookie Provider 一次性只读合同验证](../runbooks/p115-read-only-contract-check.md)。该命令使用不含 `InitRapidUpload` / `DeleteFile` 的窄接口，不连接 Ember 数据库；自动化测试只注入 fake Provider，禁止在测试中调用真实 115。失败 `code` 与写入检查器共用 `providerContractErrorCode`：HTTP 429 是 `provider_rate_limited`，本地排队是 `data_plane_queue_limited`，目录预算耗尽是 `source_directory_timeout`，保留风控哨兵是 `provider_risk_control`，不得落成 `unknown`。URL 安全策略失败时允许额外输出类型化的 reason、scheme 和 hostname，用于根据真实证据修订 allowlist，仍禁止输出任何可复用 URL 部分。
 
 受控写入验证使用独立命令 `go -C services/api run ./cmd/p115-transfer-contract-check` 和更强的显式确认值，按本合同 §8.1 执行“playback 单进程二次查重 → 秒传/单次 challenge → 目标复核 → playback downurl → playback 128 KiB Range → retained=true”。命令明确声明文件会保留在 playback 专用目录，报告 `cleanup.attempted=false`，且接口层不持有 `DeleteFile` 能力；具体步骤见 [115 playback 保留式秒传合同验证](../runbooks/p115-retained-transfer-contract-check.md)。该命令不连接 PostgreSQL，不能把二次查重结果表述为生产唯一约束/advisory lock 已验证。
 

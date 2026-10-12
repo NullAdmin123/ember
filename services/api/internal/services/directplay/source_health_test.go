@@ -81,3 +81,63 @@ func TestSourceRangeHealthClassification(t *testing.T) {
 		}
 	}
 }
+
+// TestRateLimitAndRiskControlStayAccountWideButNeverExpire covers sentinel
+// mapping: real 429 and reserved risk-control stay brief cooling, never
+// expired+disabled, including source path. Bare HTTP 403 is unavailable.
+func TestRateLimitAndRiskControlStayAccountWideButNeverExpire(t *testing.T) {
+	tests := []struct {
+		err     error
+		outcome p115account.RuntimeHealthOutcome
+	}{
+		{p115.ErrProviderRateLimited, p115account.RuntimeHealthProviderRateLimited},
+		{p115.ErrProviderRiskControl, p115account.RuntimeHealthProviderRiskControl},
+	}
+	for _, operation := range []string{
+		failureOperationResolveSourcePath, failureOperationHashSourcePreID,
+		failureOperationRapidUpload, failureOperationGetDownloadURL,
+	} {
+		for _, test := range tests {
+			outcome, ok := runtimeHealthOutcome(operation, test.err)
+			if !ok || outcome != test.outcome {
+				t.Fatalf("%s %v outcome=%s ok=%t", operation, test.err, outcome, ok)
+			}
+			mapped := mapProviderFailure(operation, test.err)
+			if !errors.Is(mapped, ErrProviderUnavailable) {
+				t.Fatalf("%s mapped=%v, want public unavailable fallback", operation, mapped)
+			}
+			if code := providerFailureCode(test.err); code != string(test.outcome) {
+				t.Fatalf("failure code=%s, want %s", code, test.outcome)
+			}
+		}
+	}
+	if _, ok := runtimeHealthOutcome(failureOperationResolveSourcePath, p115.ErrSourceDirectoryTimeout); ok {
+		t.Fatal("directory timeout must not write account health")
+	}
+	if code := providerFailureCode(p115.ErrSourceDirectoryTimeout); code != "source_directory_timeout" {
+		t.Fatalf("directory timeout task code=%s, want source_directory_timeout", code)
+	}
+}
+
+// TestLocalQueueLimitDoesNotWriteHealthOrShareRateLimitCode keeps MaxWait
+// overflow off the account cooldown path while still allowing Emby fallback.
+func TestLocalQueueLimitDoesNotWriteHealthOrShareRateLimitCode(t *testing.T) {
+	for _, operation := range []string{
+		failureOperationResolveSourcePath, failureOperationHashSourcePreID,
+		failureOperationRapidUpload, failureOperationGetDownloadURL,
+	} {
+		if _, ok := runtimeHealthOutcome(operation, p115.ErrDataPlaneQueueLimited); ok {
+			t.Fatalf("%s local queue overflow wrote account health", operation)
+		}
+		mapped := mapProviderFailure(operation, p115.ErrDataPlaneQueueLimited)
+		if !errors.Is(mapped, ErrProviderUnavailable) {
+			t.Fatalf("%s mapped=%v, want public unavailable fallback", operation, mapped)
+		}
+		if code := providerFailureCode(p115.ErrDataPlaneQueueLimited); code != "data_plane_queue_limited" {
+			t.Fatalf("failure code=%s, want data_plane_queue_limited", code)
+		}
+		if code := providerFailureCode(p115.ErrDataPlaneQueueLimited); code == "provider_rate_limited" {
+			t.Fatal("local queue overflow reused upstream 429 task code")
+		}
+	}
+}

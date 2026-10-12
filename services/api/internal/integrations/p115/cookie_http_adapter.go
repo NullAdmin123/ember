@@ -65,6 +65,7 @@ type CookieHTTPAdapter struct {
 	sourceResolvePageSize   int
 	sourceResolveMaxEntries int
 	sourceFlights           sourceDirectoryFlights
+	limiter                 *accountRateLimiter
 }
 
 // NewCookieHTTPAdapter builds the production adapter without performing a network call.
@@ -73,6 +74,7 @@ func NewCookieHTTPAdapter() *CookieHTTPAdapter {
 	if err != nil {
 		panic("invalid fixed 115 Cookie HTTP endpoint: " + err.Error())
 	}
+	attachDataPlaneLimiter(adapter)
 	return adapter
 }
 
@@ -509,13 +511,16 @@ func (a *CookieHTTPAdapter) InitRapidUpload(ctx context.Context, credential Cred
 	httpRequest.Header.Set("Cookie", credential.Cookie)
 	httpRequest.Header.Set("User-Agent", cookieUploadUserAgent(cookieUploadAppVersion))
 
+	if err := a.waitDataPlane(ctx, credential); err != nil {
+		return RapidUploadResult{}, err
+	}
 	response, err := a.client.Do(httpRequest)
 	if err != nil {
 		return RapidUploadResult{}, fmt.Errorf("%w: %v", ErrProviderUnavailable, upstream.SafeUpstreamError(err, "p115"))
 	}
 	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return RapidUploadResult{}, fmt.Errorf("%w: %v", ErrProviderUnavailable, upstream.SafeUpstreamHTTPError("p115", response.StatusCode))
+	if err := mapCookieAPIStatus(response.StatusCode); err != nil {
+		return RapidUploadResult{}, err
 	}
 	ciphertext, err := io.ReadAll(io.LimitReader(response.Body, maxCookieResponseBody+1))
 	if err != nil {
@@ -563,6 +568,9 @@ func (a *CookieHTTPAdapter) GetDownloadURL(ctx context.Context, credential Crede
 		len(userAgent) > maxDownloadUserAgentLength || strings.ContainsAny(userAgent, "\r\n") {
 		return DownloadURLResult{}, ErrInvalidRequest
 	}
+	if err := a.waitDataPlane(ctx, credential); err != nil {
+		return DownloadURLResult{}, err
+	}
 	userID, err := strconv.ParseUint(providerUserID, 10, 64)
 	if err != nil || userID == 0 {
 		return DownloadURLResult{}, ErrCredentialRejected
@@ -594,8 +602,8 @@ func (a *CookieHTTPAdapter) GetDownloadURL(ctx context.Context, credential Crede
 		return DownloadURLResult{}, err
 	}
 	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return DownloadURLResult{}, fmt.Errorf("%w: %v", ErrProviderUnavailable, upstream.SafeUpstreamHTTPError("p115", response.StatusCode))
+	if err := mapCookieAPIStatus(response.StatusCode); err != nil {
+		return DownloadURLResult{}, err
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxCookieResponseBody+1))
 	if err != nil {
@@ -739,13 +747,16 @@ func (a *CookieHTTPAdapter) DeleteFile(ctx context.Context, credential Credentia
 	request.Header.Set("Cookie", credential.Cookie)
 	request.Header.Set("User-Agent", credential.UserAgent)
 
+	if err := a.waitDataPlane(ctx, credential); err != nil {
+		return err
+	}
 	response, err := a.client.Do(request)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrProviderUnavailable, upstream.SafeUpstreamError(err, "p115"))
 	}
 	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("%w: %v", ErrProviderUnavailable, upstream.SafeUpstreamHTTPError("p115", response.StatusCode))
+	if err := mapCookieAPIStatus(response.StatusCode); err != nil {
+		return err
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxCookieResponseBody+1))
 	if err != nil {
@@ -779,6 +790,9 @@ func (a *CookieHTTPAdapter) getJSON(
 ) (resultErr error) {
 	ctx, observation := observeOperation(ctx, cookieGETStage(endpoint.Path))
 	defer func() { resultErr = observation.finish(resultErr) }()
+	if err := a.waitDataPlane(ctx, credential); err != nil {
+		return err
+	}
 	requestURL := *endpoint
 	if params != nil {
 		requestURL.RawQuery = params.Encode()
@@ -796,8 +810,8 @@ func (a *CookieHTTPAdapter) getJSON(
 		return err
 	}
 	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("%w: %v", ErrProviderUnavailable, upstream.SafeUpstreamHTTPError("p115", response.StatusCode))
+	if err := mapCookieAPIStatus(response.StatusCode); err != nil {
+		return err
 	}
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxCookieResponseBody+1))
@@ -1553,6 +1567,12 @@ func singleDownloadQueryValue(query url.Values, key string) (string, error) {
 		return "", protocolError("download URL query field invalid")
 	}
 	return values[0], nil
+}
+
+// IsAllowedDownloadHost keeps redirects inside the initial 115-owned hostname
+// boundary. Gateway and caches reuse this exact allowlist; it is not widened here.
+func IsAllowedDownloadHost(hostname string) bool {
+	return isAllowed115DownloadHost(hostname)
 }
 
 // isAllowed115DownloadHost keeps redirects inside the initial 115-owned hostname boundary.

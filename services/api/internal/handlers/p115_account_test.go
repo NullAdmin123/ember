@@ -178,16 +178,23 @@ func TestP115AccountHandlerRejectsPartialPlaybackConfig(t *testing.T) {
 }
 
 func TestP115AccountHandlerValidateMapsProviderFailureSafely(t *testing.T) {
-	handler := &P115AccountHandler{service: &stubP115AccountService{
-		validateFn: func(context.Context, string) (*p115accountpkg.ValidationResult, error) {
-			return nil, p115integration.ErrProviderUnavailable
-		},
-	}}
-	ctx, recorder := newTestConfigContext(http.MethodPost, "/api/v1/admin/p115-accounts/account_1/validate", nil)
-	ctx.Params = gin.Params{{Key: "id", Value: "account_1"}}
-	handler.Validate(ctx)
-	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), `"error":"115 服务暂不可用"`) {
-		t.Fatalf("unexpected response: status=%d body=%s", recorder.Code, recorder.Body.String())
+	for _, err := range []error{
+		p115integration.ErrProviderUnavailable,
+		p115integration.ErrProviderProtocol,
+		p115integration.ErrProviderRateLimited,
+		p115integration.ErrProviderRiskControl,
+	} {
+		handler := &P115AccountHandler{service: &stubP115AccountService{
+			validateFn: func(context.Context, string) (*p115accountpkg.ValidationResult, error) {
+				return nil, err
+			},
+		}}
+		ctx, recorder := newTestConfigContext(http.MethodPost, "/api/v1/admin/p115-accounts/account_1/validate", nil)
+		ctx.Params = gin.Params{{Key: "id", Value: "account_1"}}
+		handler.Validate(ctx)
+		if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), `"error":"115 服务暂不可用"`) {
+			t.Fatalf("%v unexpected response: status=%d body=%s", err, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 

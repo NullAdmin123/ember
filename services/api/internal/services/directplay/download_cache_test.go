@@ -241,7 +241,11 @@ func TestDownloadCacheExpiryAndNoSlidingTTL(t *testing.T) {
 				return c
 			}
 			get()
-			window := lifetime - downloadCacheSafetyWindow
+			safety := lifetime / 10
+			if safety > 5*time.Minute {
+				safety = 5 * time.Minute
+			}
+			window := lifetime - safety
 			now = now.Add(window - time.Nanosecond)
 			if !get().downloadCacheHit {
 				t.Fatal("missed before deadline")
@@ -260,7 +264,7 @@ func TestDownloadCacheExpiryAndNoSlidingTTL(t *testing.T) {
 // TestDownloadCacheDoesNotRetainInvalidOrFailedResults covers recovery after
 // failure and bypass for half-open/unknown account snapshots.
 func TestDownloadCacheDoesNotRetainInvalidOrFailedResults(t *testing.T) {
-	for _, kind := range []string{"failure", "expired", "cookie-required", "zero-concurrency", "short-lived", "oversize", "http", "cancel", "probe"} {
+	for _, kind := range []string{"failure", "expired", "cookie-required", "oversize", "http", "cancel", "probe", "foreign-host"} {
 		t.Run(kind, func(t *testing.T) {
 			s, p, a, scope := cacheDownloadFixture(t)
 			good := p.download
@@ -273,10 +277,8 @@ func TestDownloadCacheDoesNotRetainInvalidOrFailedResults(t *testing.T) {
 				p.download.ExpiresAt = s.now()
 			case "cookie-required":
 				p.download.HeaderMode = p115.DownloadHeadersSameUserAgentAndCookie
-			case "zero-concurrency":
-				p.download.ConcurrentOpenLimit = 0
-			case "short-lived":
-				p.download.ExpiresAt = s.now().Add(10 * time.Second)
+			case "foreign-host":
+				p.download.URL = "https://cdn.example.invalid/fixture"
 			case "oversize":
 				p.download.URL = "https://cdn.115.com/" + strings.Repeat("x", maxCachedDownloadURLBytes)
 			case "http":
@@ -296,6 +298,60 @@ func TestDownloadCacheDoesNotRetainInvalidOrFailedResults(t *testing.T) {
 				t.Fatalf("recovery hit=%t calls=%d err=%v", result.downloadCacheHit, countDownloadCalls(p), err)
 			}
 		})
+	}
+}
+
+// TestDownloadCacheAcceptsUnlimitedConcurrency keeps c=0 cacheable and does
+// not treat the 115 URL flag as Ember's Redis stream quota.
+func TestDownloadCacheAcceptsUnlimitedConcurrency(t *testing.T) {
+	s, p, a, scope := cacheDownloadFixture(t)
+	p.download.ConcurrentOpenLimit = 0
+	first, err := s.downloadCandidate(context.Background(), a, p.targetFile, "ua", "", true, scope)
+	if err != nil || first.ConcurrentOpenLimit != 0 || first.downloadCacheHit {
+		t.Fatalf("first=%+v err=%v", first, err)
+	}
+	second, err := s.downloadCandidate(context.Background(), a, p.targetFile, "ua", "", true, scope)
+	if err != nil || !second.downloadCacheHit || second.ConcurrentOpenLimit != 0 {
+		t.Fatalf("cached c=0 hit=%t limit=%d err=%v", second.downloadCacheHit, second.ConcurrentOpenLimit, err)
+	}
+}
+
+// TestDownloadCacheRetainsShortLivedURL keeps a 10s link reusable instead of
+// disabling cache because the old fixed 10s safety window consumed its life.
+func TestDownloadCacheRetainsShortLivedURL(t *testing.T) {
+	s, p, a, scope := cacheDownloadFixture(t)
+	now := s.now()
+	s.now = func() time.Time { return now }
+	p.download.ExpiresAt = now.Add(10 * time.Second)
+	if _, err := s.downloadCandidate(context.Background(), a, p.targetFile, "ua", "", true, scope); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(8 * time.Second)
+	hit, err := s.downloadCandidate(context.Background(), a, p.targetFile, "ua", "", true, scope)
+	if err != nil || !hit.downloadCacheHit {
+		t.Fatalf("short-lived hit=%t err=%v", hit.downloadCacheHit, err)
+	}
+	now = now.Add(time.Second)
+	if miss, err := s.downloadCandidate(context.Background(), a, p.targetFile, "ua", "", true, scope); err != nil || miss.downloadCacheHit {
+		t.Fatalf("after 10%% window hit=%t err=%v", miss.downloadCacheHit, err)
+	}
+}
+
+// TestUnlimitedDownloadConcurrencyStillUsesAccountLeaseQuota proves URL c=0
+// never bypasses or zeroes Ember's configured stream quota.
+func TestUnlimitedDownloadConcurrencyStillUsesAccountLeaseQuota(t *testing.T) {
+	p := newFakeProvider()
+	p.download.ConcurrentOpenLimit = 0
+	p.searchResults = [][]p115.File{{p.targetFile}, {p.targetFile}}
+	accounts := &fakeRoutedAccountRuntime{route: routedPlaybackFixture()}
+	accounts.route.EffectiveMaxConcurrentStreams = 1
+	service := newRoutedDirectPlayForTest(t, accounts, p, p115quota.NewMemoryLeaseStore())
+	if _, err := service.ResolveMediaPath(context.Background(), routedMediaPathRequest("GET", "first")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.ResolveMediaPath(context.Background(), routedMediaPathRequest("GET", "second"))
+	if !errors.Is(err, ErrAccountConcurrencyExceeded) {
+		t.Fatalf("second stream error=%v, want account quota", err)
 	}
 }
 

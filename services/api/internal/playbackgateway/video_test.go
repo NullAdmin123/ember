@@ -20,7 +20,7 @@ import (
 	"github.com/konghang/ember/backend/internal/services/p115quota"
 )
 
-const fixtureRedirectURL = "https://cdn.example.invalid/video.mkv?t=1787414400"
+const fixtureRedirectURL = "https://cdnfhnfile.115cdn.net/video.mkv?t=1787414400"
 
 func TestGatewayVideoRedirectUsesPlaybackProofAndNeverCallsEmby(t *testing.T) {
 	// An invalid request exits before dependency loading but still produces a
@@ -364,6 +364,11 @@ func TestGatewayVideoAccelerationIneligibleOrInvalidFallsBack(t *testing.T) {
 		{
 			name: "invalid candidate", target: "/emby/Videos/item-1/stream.mkv?MediaSourceId=source-1&PlaySessionId=session-1&Static=true",
 			directPlay:      &fakeDirectPlayService{result: directplay.RedirectCandidate{URL: "http://unsafe.invalid/video.mkv", ExpiresAt: time.Now().Add(time.Minute), ConcurrentOpenLimit: 1}},
+			wantDirectCalls: 1, wantStage: "direct_play", wantReason: "provider_protocol",
+		},
+		{
+			name: "foreign https host", target: "/emby/Videos/item-1/stream.mkv?MediaSourceId=source-1&PlaySessionId=session-1&Static=true",
+			directPlay:      &fakeDirectPlayService{result: directplay.RedirectCandidate{URL: "https://cdn.example.invalid/video.mkv", ExpiresAt: time.Now().Add(time.Minute), ConcurrentOpenLimit: 1}},
 			wantDirectCalls: 1, wantStage: "direct_play", wantReason: "provider_protocol",
 		},
 	}
@@ -887,6 +892,25 @@ func newVideoRequest(method, target string) *http.Request {
 	request := httptest.NewRequest(method, target, nil)
 	request.Header.Set(accessTokenHeader, fixtureAccessToken)
 	return request
+}
+
+func TestValidRedirectCandidateAllowsUnlimitedConcurrencyAndKeepsAllowlist(t *testing.T) {
+	now := time.Now().Add(time.Minute)
+	if !validRedirectCandidate(directplay.RedirectCandidate{
+		URL: fixtureRedirectURL, ExpiresAt: now, ConcurrentOpenLimit: 0,
+	}) {
+		t.Fatal("c=0 allowlisted candidate rejected")
+	}
+	if validRedirectCandidate(directplay.RedirectCandidate{
+		URL: "https://cdn.example.invalid/video.mkv", ExpiresAt: now, ConcurrentOpenLimit: 2,
+	}) {
+		t.Fatal("foreign host passed final 302 allowlist")
+	}
+	if validRedirectCandidate(directplay.RedirectCandidate{
+		URL: "https://other.115cdn.net/video.mkv", ExpiresAt: now, ConcurrentOpenLimit: 2,
+	}) {
+		t.Fatal("allowlist was widened to sibling 115cdn.net hosts")
+	}
 }
 
 func validFixtureRedirectCandidate() directplay.RedirectCandidate {

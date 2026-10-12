@@ -113,6 +113,8 @@ P115_TRANSFER_CHECK_EXIT=$?
 p115 transfer contract check failed: stage=<stage> code=<code> fileMayExist=<true|false> cleanupAttempted=false
 ```
 
+`code` 与只读检查器共用 `providerContractErrorCode`。HTTP 429 必须是 `provider_rate_limited`，不能写成 `unknown`。稳定码还包括 `provider_risk_control`、`data_plane_queue_limited`、`source_directory_timeout`，以及既有的 `credential_rejected` / `provider_unavailable` / `provider_protocol`。
+
 `fileMayExist=true` 表示 Provider 已返回 reused 或查重已命中，专用目录中可能保留目标文件。不要立即重跑；先在 playback 专用目录人工确认，并保留文件供后续快速路径验证。
 
 下载 hostname 被策略拒绝时，会额外输出仅含 reason/scheme/hostname 的安全证据；不能据此自动开放整个域名后缀。上传协议失败时会额外输出固定 `protocolPhase`、`decryptPhase`、受限 `contentType` / `bodyShape` 和 `bodyBytes`，用于区分请求构造、AES、LZ4、响应读取与字段映射；不会输出响应正文、Cookie、签名或 Provider message。

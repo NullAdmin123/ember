@@ -315,8 +315,8 @@ func TestSourceDirectoryFailureAndDeadlineAreNotCached(t *testing.T) {
 		<-ctx.Done()
 		return nil, ErrProviderUnavailable
 	})
-	if !errors.Is(err, ErrProviderUnavailable) || errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("shared budget was confused with a client deadline: %v", err)
+	if !errors.Is(err, ErrSourceDirectoryTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("shared budget was confused with a provider outage: %v", err)
 	}
 	waitSourceFlightWaiters(t, &group, 0)
 }

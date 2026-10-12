@@ -18,6 +18,7 @@ func NewCookieProvider() *CookieProvider {
 	if err != nil {
 		panic("invalid fixed 115 Cookie HTTP endpoint: " + err.Error())
 	}
+	attachDataPlaneLimiter(adapter)
 	return &CookieProvider{
 		CookieCredentialValidator: validator,
 		CookieHTTPAdapter:         adapter,

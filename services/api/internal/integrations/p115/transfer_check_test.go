@@ -132,6 +132,27 @@ func TestRunTransferContractCheckReportsRetainedRiskAfterReusedStatus(t *testing
 	}
 }
 
+func TestRunTransferContractCheckMapsRateLimitedAndSiblingSentinels(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{ErrProviderRateLimited, "provider_rate_limited"},
+		{ErrProviderRiskControl, "provider_risk_control"},
+		{ErrDataPlaneQueueLimited, "data_plane_queue_limited"},
+		{ErrSourceDirectoryTimeout, "source_directory_timeout"},
+	}
+	for _, test := range tests {
+		provider := newFakeTransferContractProvider()
+		provider.validateErr = test.err
+		_, err := RunTransferContractCheck(context.Background(), provider, fixtureTransferCheckInput())
+		stage, code, fileMayExist := TransferContractCheckFailure(err)
+		if stage != "source_credential" || code != test.want || code == "unknown" || fileMayExist {
+			t.Fatalf("%v stage=%q code=%q fileMayExist=%t, want source_credential/%s", test.err, stage, code, fileMayExist, test.want)
+		}
+	}
+}
+
 func TestRunTransferContractCheckRejectsInvalidInputBeforeProvider(t *testing.T) {
 	provider := newFakeTransferContractProvider()
 	input := fixtureTransferCheckInput()
@@ -158,6 +179,7 @@ type fakeTransferContractProvider struct {
 	uploadRequests     []RapidUploadRequest
 	rangeRequests      []FileRangeRequest
 	findErr            error
+	validateErr        error
 }
 
 func newFakeTransferContractProvider() *fakeTransferContractProvider {
@@ -185,6 +207,9 @@ func newFakeTransferContractProvider() *fakeTransferContractProvider {
 
 func (provider *fakeTransferContractProvider) ValidateCredential(_ context.Context, credential Credential) (AccountIdentity, error) {
 	provider.calls = append(provider.calls, "validate:"+credential.AccountID)
+	if provider.validateErr != nil {
+		return AccountIdentity{}, provider.validateErr
+	}
 	if credential.AccountID == "source" {
 		return provider.sourceIdentity, nil
 	}

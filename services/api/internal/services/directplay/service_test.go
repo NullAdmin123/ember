@@ -414,6 +414,60 @@ func TestServiceResolveReportsAccountWideProviderFailures(t *testing.T) {
 	}
 }
 
+func TestServiceResolveLocalQueueLimitFallbacksWithoutHealth(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*fakeProvider)
+		wantRole  models.P115AccountRole
+	}{
+		{
+			name: "source path",
+			configure: func(provider *fakeProvider) {
+				provider.resolveErr = p115integration.ErrDataPlaneQueueLimited
+			},
+			wantRole: models.P115AccountRoleSource,
+		},
+		{
+			name: "playback search",
+			configure: func(provider *fakeProvider) {
+				provider.searchErr = p115integration.ErrDataPlaneQueueLimited
+			},
+			wantRole: models.P115AccountRolePlayback,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			health := &fakeAccountHealthReporter{}
+			provider := newFakeProvider()
+			tt.configure(provider)
+			service := newServiceWithDependencies(fakeAccountLoader{health: health}, provider, &fakeTaskStore{}, &fakeTaskLocker{})
+
+			_, err := service.Resolve(context.Background(), fixtureResolveRequest())
+			if !errors.Is(err, ErrProviderUnavailable) {
+				t.Fatalf("Resolve() error = %v, want Emby fallback", err)
+			}
+			for _, event := range health.events {
+				if event.role == tt.wantRole {
+					t.Fatalf("local queue reject wrote %s health: %+v", tt.wantRole, health.events)
+				}
+				if event.outcome == p115account.RuntimeHealthProviderRateLimited ||
+					event.outcome == p115account.RuntimeHealthProviderRiskControl {
+					t.Fatalf("local queue reject reused upstream cooling: %+v", health.events)
+				}
+			}
+			if tt.wantRole == models.P115AccountRoleSource && len(health.events) != 0 {
+				t.Fatalf("source local reject wrote health: %+v", health.events)
+			}
+			if tt.wantRole == models.P115AccountRolePlayback {
+				if len(health.events) != 1 || health.events[0].role != models.P115AccountRoleSource ||
+					health.events[0].outcome != p115account.RuntimeHealthSucceeded {
+					t.Fatalf("playback local reject health = %+v", health.events)
+				}
+			}
+		})
+	}
+}
+
 func TestServiceResolveDoesNotTreatCancellationAsAccountFailure(t *testing.T) {
 	health := &fakeAccountHealthReporter{}
 	provider := newFakeProvider()
