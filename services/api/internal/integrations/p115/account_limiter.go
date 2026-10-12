@@ -3,6 +3,7 @@ package p115
 import (
 	"container/list"
 	"context"
+	"log"
 	"math"
 	"os"
 	"strconv"
@@ -18,7 +19,16 @@ const (
 	// minDataPlaneRPS is the slowest positive override. Smaller values overflow
 	// time.Duration when converted from seconds and are useless for playback.
 	minDataPlaneRPS = 0.01
-	maxTimerSeconds = float64(time.Hour/time.Second) * 24
+	// maxDataPlaneRPS keeps refill delay meaningful. A huge finite RPS makes
+	// needed/RPS ≈ 0 and refills the bucket on any elapsed tick.
+	maxDataPlaneRPS = 100
+	// maxDataPlaneBurst stays well below the 2^53 integer-exact range of
+	// float64 tokens. Near-MaxInt burst makes tokens-- a no-op.
+	maxDataPlaneBurst = 1000
+	// maxDataPlaneMaxWait is the longest local queue a playback request may
+	// sit before falling back. Multi-hour ParseDuration values would hang.
+	maxDataPlaneMaxWait = time.Minute
+	maxTimerSeconds     = float64(time.Hour/time.Second) * 24
 )
 
 // DataPlaneLimitConfig is the conservative per-account 115 API pacing policy.
@@ -62,7 +72,10 @@ type dataPlaneWaiter struct {
 // ParseDataPlaneLimitConfig reads optional env overrides. Invalid values keep
 // the conservative defaults rather than disabling protection. RPS=0 remains
 // the explicit bypass; Inf/NaN, sub-minimum, negative, and negative-zero RPS
-// keep the default. Burst and MaxWait must be positive.
+// keep the default. Burst and MaxWait must be positive. Values above the
+// business caps (RPS 100, Burst 1000, MaxWait 1m) also keep the default and
+// log, because oversized Burst/RPS silently disable pacing and a huge MaxWait
+// holds playback instead of falling back.
 func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 	config := DataPlaneLimitConfig{
 		RPS:     defaultDataPlaneRPS,
@@ -73,21 +86,39 @@ func ParseDataPlaneLimitConfig() DataPlaneLimitConfig {
 		if parsed, err := strconv.ParseFloat(value, 64); err == nil && isFiniteRate(parsed) {
 			// Signbit rejects -0 / -0.0, which ParseFloat treats as 0.
 			if !math.Signbit(parsed) && (parsed == 0 || parsed >= minDataPlaneRPS) {
-				config.RPS = parsed
+				if parsed > maxDataPlaneRPS {
+					logOversizedDataPlaneOverride("P115_DATA_PLANE_RPS", value, maxDataPlaneRPS, defaultDataPlaneRPS)
+				} else {
+					config.RPS = parsed
+				}
 			}
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("P115_DATA_PLANE_BURST")); value != "" {
 		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
-			config.Burst = parsed
+			if parsed > maxDataPlaneBurst {
+				logOversizedDataPlaneOverride("P115_DATA_PLANE_BURST", value, maxDataPlaneBurst, defaultDataPlaneBurst)
+			} else {
+				config.Burst = parsed
+			}
 		}
 	}
 	if value := strings.TrimSpace(os.Getenv("P115_DATA_PLANE_MAX_WAIT")); value != "" {
 		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
-			config.MaxWait = parsed
+			if parsed > maxDataPlaneMaxWait {
+				logOversizedDataPlaneOverride("P115_DATA_PLANE_MAX_WAIT", value, maxDataPlaneMaxWait, defaultDataPlaneMaxWait)
+			} else {
+				config.MaxWait = parsed
+			}
 		}
 	}
 	return config
+}
+
+// logOversizedDataPlaneOverride records a rejected over-cap override. The
+// caller keeps the conservative default, matching other invalid env values.
+func logOversizedDataPlaneOverride(env, value string, max, keepDefault any) {
+	log.Printf("[P115] 忽略超量数据面限流覆盖 env=%s value=%q max=%v keepDefault=%v", env, value, max, keepDefault)
 }
 
 // isFiniteRate rejects Inf/NaN so ParseFloat cannot silently disable pacing.

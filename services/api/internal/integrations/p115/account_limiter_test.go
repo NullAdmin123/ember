@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -99,6 +100,98 @@ func TestParseDataPlaneLimitConfigRejectsNegativeZeroRPS(t *testing.T) {
 		if config.RPS != defaultDataPlaneRPS {
 			t.Fatalf("RPS %q leaked as %v, want default %v", value, config.RPS, defaultDataPlaneRPS)
 		}
+	}
+}
+
+func TestParseDataPlaneLimitConfigRejectsHugeBurst(t *testing.T) {
+	for _, value := range []string{"1001", strconv.Itoa(math.MaxInt)} {
+		t.Setenv("P115_DATA_PLANE_RPS", "")
+		t.Setenv("P115_DATA_PLANE_BURST", value)
+		t.Setenv("P115_DATA_PLANE_MAX_WAIT", "")
+		config := ParseDataPlaneLimitConfig()
+		if config.Burst != defaultDataPlaneBurst {
+			t.Fatalf("Burst %q leaked as %d, want default %d", value, config.Burst, defaultDataPlaneBurst)
+		}
+	}
+}
+
+func TestParseDataPlaneLimitConfigAcceptsBurstUpperBound(t *testing.T) {
+	t.Setenv("P115_DATA_PLANE_RPS", "")
+	t.Setenv("P115_DATA_PLANE_BURST", strconv.Itoa(maxDataPlaneBurst))
+	t.Setenv("P115_DATA_PLANE_MAX_WAIT", "")
+	config := ParseDataPlaneLimitConfig()
+	if config.Burst != maxDataPlaneBurst {
+		t.Fatalf("Burst upper bound leaked as %d, want %d", config.Burst, maxDataPlaneBurst)
+	}
+}
+
+func TestParseDataPlaneLimitConfigRejectsHugeRPS(t *testing.T) {
+	for _, value := range []string{"100.1", "1e20", "1e308"} {
+		t.Setenv("P115_DATA_PLANE_RPS", value)
+		t.Setenv("P115_DATA_PLANE_BURST", "")
+		t.Setenv("P115_DATA_PLANE_MAX_WAIT", "")
+		config := ParseDataPlaneLimitConfig()
+		if config.RPS != defaultDataPlaneRPS {
+			t.Fatalf("RPS %q leaked as %v, want default %v", value, config.RPS, defaultDataPlaneRPS)
+		}
+	}
+}
+
+func TestParseDataPlaneLimitConfigAcceptsRPSUpperBound(t *testing.T) {
+	t.Setenv("P115_DATA_PLANE_RPS", "100")
+	t.Setenv("P115_DATA_PLANE_BURST", "")
+	t.Setenv("P115_DATA_PLANE_MAX_WAIT", "")
+	config := ParseDataPlaneLimitConfig()
+	if config.RPS != maxDataPlaneRPS {
+		t.Fatalf("RPS upper bound leaked as %v, want %v", config.RPS, maxDataPlaneRPS)
+	}
+}
+
+func TestParseDataPlaneLimitConfigRejectsHugeMaxWait(t *testing.T) {
+	for _, value := range []string{"1m1s", "2h", "2562047h"} {
+		t.Setenv("P115_DATA_PLANE_RPS", "")
+		t.Setenv("P115_DATA_PLANE_BURST", "")
+		t.Setenv("P115_DATA_PLANE_MAX_WAIT", value)
+		config := ParseDataPlaneLimitConfig()
+		if config.MaxWait != defaultDataPlaneMaxWait {
+			t.Fatalf("MaxWait %q leaked as %s, want default %s", value, config.MaxWait, defaultDataPlaneMaxWait)
+		}
+	}
+}
+
+func TestParseDataPlaneLimitConfigAcceptsMaxWaitUpperBound(t *testing.T) {
+	t.Setenv("P115_DATA_PLANE_RPS", "")
+	t.Setenv("P115_DATA_PLANE_BURST", "")
+	t.Setenv("P115_DATA_PLANE_MAX_WAIT", "1m")
+	config := ParseDataPlaneLimitConfig()
+	if config.MaxWait != maxDataPlaneMaxWait {
+		t.Fatalf("MaxWait upper bound leaked as %s, want %s", config.MaxWait, maxDataPlaneMaxWait)
+	}
+}
+
+func TestHugeBurstFloat64DecrementIsNoOp(t *testing.T) {
+	tokens := float64(math.MaxInt64)
+	before := tokens
+	tokens--
+	if tokens != before {
+		t.Fatalf("expected MaxInt64 float64 decrement to be a no-op, before=%v after=%v", before, tokens)
+	}
+	capped := float64(maxDataPlaneBurst)
+	capped--
+	if capped != float64(maxDataPlaneBurst-1) {
+		t.Fatalf("capped burst decrement failed: %v", capped)
+	}
+}
+
+func TestAccountRateLimiterCappedBurstStillConsumesTokens(t *testing.T) {
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: maxDataPlaneBurst, MaxWait: time.Millisecond})
+	for i := 0; i < maxDataPlaneBurst; i++ {
+		if err := limiter.Wait(context.Background(), "uid-burst"); err != nil {
+			t.Fatalf("token %d: %v", i, err)
+		}
+	}
+	if err := limiter.Wait(context.Background(), "uid-burst"); !errors.Is(err, ErrDataPlaneQueueLimited) {
+		t.Fatalf("burst+1 = %v, want queue limit", err)
 	}
 }
 

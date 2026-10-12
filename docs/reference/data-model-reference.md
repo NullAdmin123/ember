@@ -573,7 +573,7 @@ MediaGapScan                    （缺集扫描持久化记录，advisory lock �
 | Enabled | bool | enabled | 是否允许进入播放链路；创建和 Cookie 轮换后固定为 false |
 | LastValidatedAt | *time.Time | lastValidatedAt | 最近凭证验证时间 |
 | LastSucceededAt | *time.Time | lastSucceededAt | 最近显式验证成功或完整 DirectPlay 候选成功采样时间；持续健康播放按 1 分钟限频，恢复立即写入 |
-| CooldownUntil | *time.Time | cooldownUntil | 账号共享冷却/半开探测租约截止时间；当前固定 1 分钟 |
+| CooldownUntil | *time.Time | cooldownUntil | 账号共享冷却或半开探测租约截止时间。冷却时长按错误类型与配置：`provider_unavailable` 默认 1 分钟；`provider_rate_limited` / `provider_risk_control` 默认 15 秒 / 30 秒，可由 `P115_RATE_LIMIT_COOLDOWN` / `P115_RISK_CONTROL_COOLDOWN` 覆盖。冷却到期后半开探测另将本字段延长 1 分钟租约 |
 | LastErrorCode | *string(100) | lastErrorCode | 最近脱敏错误码 |
 | LastErrorMessage | *string(500) | lastErrorMessage | 最近脱敏错误信息 |
 | CreatedAt | time.Time | createdAt | 创建时间 |

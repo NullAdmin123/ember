@@ -223,7 +223,7 @@ stateDiagram-v2
     cooling_down --> pending: 替换 Cookie
 ```
 
-`enabled` 是独立布尔轴：`active` 不等于已启用。显式验证或播放调用确认 Cookie 失效时会进入 `expired + disabled`；显式验证的网络/协议错误进入 `error` 并保留 enabled。播放期间临时 Provider 故障进入固定 1 分钟 `cooling_down`，未到期时不读取 Cookie；到期后 PostgreSQL 行锁只发放一个 1 分钟半开探测租约，成功恢复 `active`，失败重新冷却。播放协议错误进入 `error`。路由和目录保存使用独立 `config_version`，健康成功不再使其他请求的配置快照失效；Cookie、显式验证、启停、目录/并发和解绑会推进配置版本。运行期回写同时匹配加载凭证时的 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的结果。
+`enabled` 是独立布尔轴：`active` 不等于已启用。显式验证或播放调用确认 Cookie 失效时会进入 `expired + disabled`；显式验证的网络/协议错误进入 `error` 并保留 enabled。播放期间临时 Provider 故障进入默认 1 分钟 `cooling_down`，限流 / 风控分别默认 15 秒 / 30 秒；未到期时不读取 Cookie；到期后 PostgreSQL 行锁只发放一个 1 分钟半开探测租约，成功恢复 `active`，失败按错误类型重新冷却。播放协议错误进入 `error`。路由和目录保存使用独立 `config_version`，健康成功不再使其他请求的配置快照失效；Cookie、显式验证、启停、目录/并发和解绑会推进配置版本。运行期回写同时匹配加载凭证时的 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的结果。
 
 source 的路径解析及媒体身份校验成功，即构成真实源健康观察。后续目标查询、起播许可、配额或存储拒绝不应让 source 继续停在半开冷却；源健康在本次源调用结束后独立结算，若后续源 preID/challenge 明确凭证失效或 Provider 临时不可用则不报告成功；业务拒绝、Range 协议不匹配和无效 hash 按文件请求隔离，不把整个源账号置为 error，任务失败落库异常也不能掩盖源失败。继续使用原凭证快照 CAS，较新的故障、停用和 Cookie 替换不能被旧成功覆盖。playback 仍以真实下载接口成功作为恢复证据。
 
