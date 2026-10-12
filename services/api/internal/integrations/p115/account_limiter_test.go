@@ -304,8 +304,8 @@ func TestAccountRateLimiterStaleTimerDoesNotReplaceSuccessor(t *testing.T) {
 	doneA := make(chan error, 1)
 	go func() { doneA <- limiter.Wait(ctxA, "uid-1") }()
 	waitUntilQueued(t, limiter, "uid-1", 1)
-	if created := sched.createdCount(); created != 1 {
-		t.Fatalf("first arm created %d timers", created)
+	if created := sched.createdCount(); created != 2 {
+		t.Fatalf("first arm created %d timers, want token + MaxWait", created)
 	}
 
 	entered := make(chan struct{})
@@ -326,21 +326,21 @@ func TestAccountRateLimiterStaleTimerDoesNotReplaceSuccessor(t *testing.T) {
 	doneB := make(chan error, 1)
 	go func() { doneB <- limiter.Wait(context.Background(), "uid-1") }()
 	waitUntilQueued(t, limiter, "uid-1", 1)
-	if created := sched.createdCount(); created != 2 {
-		t.Fatalf("re-arm created %d timers, want 2", created)
+	if created := sched.createdCount(); created != 4 {
+		t.Fatalf("re-arm created %d timers, want 4 (two token + two MaxWait)", created)
 	}
 
 	close(released)
 	sched.waitIdle(t)
 
-	if created := sched.createdCount(); created != 2 {
+	if created := sched.createdCount(); created != 4 {
 		t.Fatalf("stale callback armed extra timer: created=%d", created)
 	}
-	if max := sched.maxActiveCount(); max > 1 {
-		t.Fatalf("overlapping active timers: max=%d", max)
+	if max := sched.maxActiveCount(); max > 2 {
+		t.Fatalf("overlapping active token+deadline timers: max=%d", max)
 	}
-	if active := sched.activeCount(); active != 1 {
-		t.Fatalf("successor timer lost: active=%d", active)
+	if active := sched.activeCount(); active != 2 {
+		t.Fatalf("successor timers lost: active=%d, want token + MaxWait", active)
 	}
 
 	nowMu.Lock()
@@ -358,6 +358,113 @@ func TestAccountRateLimiterStaleTimerDoesNotReplaceSuccessor(t *testing.T) {
 	sched.waitIdle(t)
 	if active := sched.activeCount(); active != 0 {
 		t.Fatalf("timer left armed after grant: active=%d", active)
+	}
+}
+
+func TestAccountRateLimiterLateTokenTimerHonorsMaxWaitDeadline(t *testing.T) {
+	sched := newTrackedScheduler()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	var nowMu sync.Mutex
+	var grants atomic.Int32
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: time.Second})
+	limiter.now = func() time.Time {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		return now
+	}
+	limiter.afterFunc = sched.AfterFunc
+	limiter.observeGrant = func(time.Time) { grants.Add(1) }
+
+	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
+		t.Fatalf("burst token: %v", err)
+	}
+	if grants.Load() != 1 {
+		t.Fatalf("burst grants=%d", grants.Load())
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- limiter.Wait(context.Background(), "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 1)
+	if created := sched.createdCount(); created != 2 {
+		t.Fatalf("queued waiter created %d timers, want token + MaxWait", created)
+	}
+
+	sched.fireAt(1)
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrDataPlaneQueueLimited) || errors.Is(err, ErrProviderRateLimited) {
+			t.Fatalf("late token error = %v, want local queue limit", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MaxWait deadline did not unblock waiter")
+	}
+	if limiter.queuedWaiters("uid-1") != 0 {
+		t.Fatal("expired waiter stayed queued")
+	}
+	if grants.Load() != 1 {
+		t.Fatalf("expired waiter consumed a token: grants=%d", grants.Load())
+	}
+
+	sched.fireAt(0)
+	sched.waitIdle(t)
+	if grants.Load() != 1 {
+		t.Fatalf("late token timer granted after expiry: grants=%d", grants.Load())
+	}
+
+	nowMu.Lock()
+	now = now.Add(time.Second)
+	nowMu.Unlock()
+	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
+		t.Fatalf("follow-up after expiry: %v", err)
+	}
+	if grants.Load() != 2 {
+		t.Fatalf("follow-up grants=%d, want 2", grants.Load())
+	}
+}
+
+func TestAccountRateLimiterMaxWaitRaceUsesOrReturnsToken(t *testing.T) {
+	sched := newTrackedScheduler()
+	var grants atomic.Int32
+	limiter := newAccountRateLimiter(DataPlaneLimitConfig{RPS: 1, Burst: 1, MaxWait: time.Second})
+	limiter.now = func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
+	limiter.afterFunc = sched.AfterFunc
+	limiter.observeGrant = func(time.Time) { grants.Add(1) }
+
+	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
+		t.Fatalf("burst token: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- limiter.Wait(context.Background(), "uid-1") }()
+	waitUntilQueued(t, limiter, "uid-1", 1)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); sched.fireAt(0) }()
+	go func() { defer wg.Done(); sched.fireAt(1) }()
+	wg.Wait()
+
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("grant/expiry race hung")
+	}
+	if err != nil && !errors.Is(err, ErrDataPlaneQueueLimited) {
+		t.Fatalf("race error = %v", err)
+	}
+	got := grants.Load()
+	if err == nil {
+		if got != 2 {
+			t.Fatalf("used token but grants=%d, want 2", got)
+		}
+		return
+	}
+	if got != 1 {
+		t.Fatalf("returned token but grants=%d, want 1", got)
+	}
+	if limiter.queuedWaiters("uid-1") != 0 {
+		t.Fatal("expired waiter remained queued after race")
 	}
 }
 
@@ -514,6 +621,29 @@ func (s *trackedScheduler) holdNext(entered, release chan struct{}) {
 	s.mu.Lock()
 	s.holdEnter = entered
 	s.holdRelease = release
+	s.mu.Unlock()
+}
+
+func (s *trackedScheduler) fireAt(index int) {
+	s.mu.Lock()
+	if index < 0 || index >= len(s.timers) {
+		s.mu.Unlock()
+		return
+	}
+	timer := s.timers[index]
+	if timer.stopped || timer.started {
+		s.mu.Unlock()
+		return
+	}
+	timer.started = true
+	s.mu.Unlock()
+	timer.fn()
+	s.mu.Lock()
+	if !timer.stopped {
+		s.active--
+		timer.stopped = true
+	}
+	close(timer.done)
 	s.mu.Unlock()
 }
 

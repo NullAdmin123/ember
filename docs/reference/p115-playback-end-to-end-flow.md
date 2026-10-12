@@ -638,7 +638,7 @@ Debug 请求摘要记录有界 method/Host/原始 request path、query key、rou
 
 #### 【P2-1，已关闭】播放运行期已回写账号失效、冷却和成功状态
 
-- 关闭实现：`directplay.Service` 通过窄 `AccountHealthReporter` 只回传实际调用账号和六种固定结果；成功按 1 分钟采样更新 source/playback `lastSucceededAt`（首次及恢复立即写入），凭证失效进入 `expired + disabled`，临时不可用进入 1 分钟 `cooling_down`，真实 115 `429` 短暂限流冷却，风控哨兵保留但裸 HTTP `403` 按临时不可用处理，协议错误进入 `error`。本地 `MaxWait` 拒绝不回写健康。
+- 关闭实现：`directplay.Service` 通过窄 `AccountHealthReporter` 只回传实际调用账号和六种固定结果；成功按 1 分钟采样更新 source/playback `lastSucceededAt`（首次及恢复立即写入），凭证失效进入 `expired + disabled`，临时不可用进入 1 分钟 `cooling_down`，真实 115 `429` 短暂限流冷却，风控哨兵保留但裸 HTTP `403` 按临时不可用处理，协议错误进入 `error`。本地 `MaxWait` 拒绝（入队估计或实际排队到期）不回写健康。
 - 并发边界：冷却期间不读取 Cookie；到期后 `AcquireRuntimeByRole` 在 PostgreSQL 行锁内续租并只放行一个半开探测。回写同时匹配 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的健康结果。
 - 失败边界：请求取消和文件级错误不改变账号状态；源路径解析的业务拒绝、响应协议异常和无效文件身份也属于请求级失败，不把源账号置为 `error`。明确凭证失效/临时不可用和其他 Provider 操作的健康处理保持原合同。健康回写使用独立 2 秒上限，失败不改写原始 302/fallback 结果。
 - 验证证据：Go 单元/race 与独立 PostgreSQL schema 已覆盖四类映射、冷却阻断、过期冷却并发单探测、成功恢复、凭证失效停用和旧 Cookie 结果丢弃；没有请求真实 115，生产自然故障的冷却时长仍待观察。
