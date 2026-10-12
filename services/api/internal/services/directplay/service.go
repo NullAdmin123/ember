@@ -26,7 +26,6 @@ const (
 	maxDirectPlayMediaPath       = 16 * 1024
 	maxMappedRelativePath        = 4 * 1024
 	maxMappedPathSegment         = 1024
-	sourceReadTimeout            = 5 * time.Second
 	taskTerminalWriteTimeout     = 5 * time.Second
 	accountHealthWriteTimeout    = 2 * time.Second
 	reservationReleaseTimeout    = time.Second
@@ -1178,6 +1177,7 @@ func runtimeHealthOutcome(operation string, err error) (p115account.RuntimeHealt
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "", false
 	case errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, ErrSourceReadTimeout),
+		errors.Is(err, p115integration.ErrSourceRangeTimeout),
 		errors.Is(err, p115integration.ErrDataPlaneQueueLimited):
 		return "", false
 	case errors.Is(err, p115integration.ErrCredentialRejected):
@@ -1359,7 +1359,7 @@ func mapProviderFailure(operation string, err error) error {
 		return err
 	}
 	switch {
-	case errors.Is(err, ErrSourceReadTimeout), errors.Is(err, p115integration.ErrSourceDirectoryTimeout):
+	case errors.Is(err, ErrSourceReadTimeout), errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, p115integration.ErrSourceRangeTimeout):
 		return withFailureContext(ErrSourceReadTimeout, FailureContext{ProviderOperation: operation})
 	case errors.Is(err, p115integration.ErrCredentialRejected):
 		return withFailureContext(ErrAccountUnavailable, FailureContext{ProviderOperation: operation})
@@ -1389,6 +1389,8 @@ func providerFailureCode(err error) string {
 		return "provider_risk_control"
 	case errors.Is(err, p115integration.ErrDataPlaneQueueLimited):
 		return "data_plane_queue_limited"
+	case errors.Is(err, p115integration.ErrSourceRangeTimeout):
+		return "source_range_timeout"
 	case errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, ErrSourceReadTimeout):
 		return "source_directory_timeout"
 	default:

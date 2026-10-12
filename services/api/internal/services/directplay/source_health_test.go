@@ -69,7 +69,7 @@ func TestSourceRecoveryDoesNotOverwriteLaterSourceFailure(t *testing.T) {
 // file/CDN protocol errors but preserves explicit credential and transport failures.
 func TestSourceRangeHealthClassification(t *testing.T) {
 	for _, operation := range []string{failureOperationHashSourcePreID, failureOperationHashSourceChallenge} {
-		for _, failure := range []error{p115.ErrProviderProtocol, p115.ErrProviderRejected, ErrSourceReadTimeout, context.Canceled} {
+		for _, failure := range []error{p115.ErrProviderProtocol, p115.ErrProviderRejected, p115.ErrSourceRangeTimeout, ErrSourceReadTimeout, context.Canceled} {
 			if _, ok := runtimeHealthOutcome(operation, failure); ok {
 				t.Fatalf("file error poisoned account: %s %v", operation, failure)
 			}

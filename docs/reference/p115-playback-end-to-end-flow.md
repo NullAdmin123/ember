@@ -227,7 +227,7 @@ stateDiagram-v2
 
 source 的路径解析及媒体身份校验成功，即构成真实源健康观察。后续目标查询、起播许可、配额或存储拒绝不应让 source 继续停在半开冷却；源健康在本次源调用结束后独立结算，若后续源 preID/challenge 明确凭证失效或 Provider 临时不可用则不报告成功；业务拒绝、Range 协议不匹配和无效 hash 按文件请求隔离，不把整个源账号置为 error，任务失败落库异常也不能掩盖源失败。继续使用原凭证快照 CAS，较新的故障、停用和 Cookie 替换不能被旧成功覆盖。playback 仍以真实下载接口成功作为恢复证据。
 
-DirectPlay 对源路径查询设置 30 秒只读预算，与 Adapter 目录 flight / 分页上限对齐；每次 preID/challenge 源片段读取仍是 5 秒。超预算主动取消并以 `source_read_timeout` 回退，大目录超时不写账号健康，未开始的秒传不再执行；已开始的 retained 写入不受这一只读预算中断。主动取消本身不写账号故障；没有有效源身份时也不伪造恢复成功，既有半开探测租约保留原到期规则。该预算不限制 Emby 回退耗时，客户端实际起播仍需线上验证。
+DirectPlay 对源路径查询设置 30 秒只读预算，与 Adapter 目录 flight / 分页上限对齐；每次 preID/challenge 源片段读取最多 10 秒，源取链（含本地数据面排队）和实际 Range 各有独立 5 秒窗口。Range 的窗口覆盖 DNS、TCP/TLS、响应头与完整有界 body 读取；取链阶段不再消耗它的窗口。各阶段仍受调用方更早 deadline 与整次加速 2 分钟总 deadline 约束。超预算主动取消并以 `source_read_timeout` 回退，Adapter 的局部超时保留可用的 `download_url/source_range` 失败阶段，大目录/范围读取超时不写账号故障，未开始的秒传不再执行；已开始的 retained 写入不受这一只读预算中断。客户端取消本身不写账号故障；没有有效源身份时也不伪造恢复成功，既有半开探测租约保留原到期规则。该预算不限制 Emby 回退耗时，客户端实际起播仍需线上验证。
 
 持续健康账号复用凭证读取快照，对 1 分钟内的干净成功跳过健康 SQL；错误、恢复和配置修改后的首次成功仍立即尝试条件写入。采样观察不会推进健康版本或清除新错误。保留文件复用的访问时间使用单条条件 UPDATE，先确定最近 succeeded 任务，再按 1 分钟窗口更新；旧请求不回退时间，窗口内及外部预存文件均允许零行更新。这两个时间是观察采样，不是逐次播放审计或活跃会话真相。
 
@@ -536,6 +536,8 @@ stateDiagram-v2
 各阶段同时输出同前缀 `Calls`，例如 `targetSearchCalls=2`、`rapidUploadCalls=2`；这些是业务操作调用次数，不能当成 HTTP 请求总数。耗时使用单调时钟，单位毫秒，分别取整可能使展示值相差少量毫秒。既有 `durationMs` 仍是 Gateway 请求处理时长，fallback 时可能包含媒体代理传输，不能当作首帧时间，也不能把它与 `directPlayMs` 相加。
 
 排查 sourceResolve 耗时时，开启 Debug 后查看 `code=source_directory_resolved` 的 `parentResolveMs/listMs/listPages` 及 `shared/callers/entries/durationMs/success`。该明细每个共享任务一条，`listPages` 为实际尝试的列表请求数（含失败页），根目录文件的 `parentResolveMs=0`；不可把共享任务耗时乘以等待者人数视为串行耗时。明细不输出路径、凭证、Provider ID 或摘要。
+
+排查 preID/challenge 耗时时，Debug `source_range_completed` 的 `sourceDownloadMs` 是源取链阶段（含排队），`rangeReadMs` 是实际 CDN 请求与读取阶段，`durationMs` 是整次 Hash 读取。`provider_operation_completed stage=download_url` 与 `stage=source_range` 各自记录本次 HTTP trace，CDN 的 TLS/首字节字段不会继承源取链回调。取链失败时 `rangeReadMs=0` 且没有 CDN 请求；仅凭相邻日志不能建立并发请求的归属。上述时间已经包含在 Gateway 最终 `preIDMs/challengeMs` 内，不能与它们重复相加。
 
 每个固定视频请求在默认 Info 只打印一条播放决策；设置中心数据库项 `LOG_LEVEL=debug` 时额外打印入口、过程与统一的 `request_completed` 请求摘要，API 保存后由 Gateway 最多在 5 秒内从进程缓存刷新生效：
 

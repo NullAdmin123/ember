@@ -92,6 +92,7 @@ var (
 	ErrDataPlaneQueueLimited   = errors.New("p115 data-plane queue limited")
 	ErrProviderProtocol        = errors.New("p115 provider protocol error")
 	ErrSourceDirectoryTimeout  = errors.New("p115 source directory resolve budget exceeded")
+	ErrSourceRangeTimeout      = errors.New("p115 source range read budget exceeded")
 	ErrSourceDirectoryTooLarge = errors.New("p115 source directory exceeds resolve limit")
 	ErrSourceFileAmbiguous     = errors.New("p115 source file match is ambiguous")
 	ErrSourceFileNotFound      = errors.New("p115 source file not found")

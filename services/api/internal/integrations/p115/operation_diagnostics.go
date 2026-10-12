@@ -172,6 +172,8 @@ func (o *operationObservation) finish(err error) error {
 			reason = "data_plane_queue_limited"
 		case errors.Is(err, ErrSourceDirectoryTimeout):
 			reason = "source_directory_timeout"
+		case errors.Is(err, ErrSourceRangeTimeout):
+			reason = "source_range_timeout"
 		case errors.Is(err, ErrCredentialRejected):
 			reason = "credential_rejected"
 		case errors.Is(err, context.DeadlineExceeded):

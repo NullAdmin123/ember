@@ -1,16 +1,78 @@
 package p115
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/konghang/ember/backend/internal/logging"
 )
+
+// TestSourceRangeTraceDoesNotIncludeSignedURLFetch keeps a successful control
+// request's TLS/first-byte timing out of a failed CDN request's diagnostics.
+func TestSourceRangeTraceDoesNotIncludeSignedURLFetch(t *testing.T) {
+	previousOutput := log.Writer()
+	previousDebug := logging.DebugEnabled()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	if err := logging.ApplyLevel("debug"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		log.SetOutput(previousOutput)
+		level := "info"
+		if previousDebug {
+			level = "debug"
+		}
+		_ = logging.ApplyLevel(level)
+	})
+	adapter := newTestRangeAdapter(t, "1", func(request *http.Request) (*http.Response, error) {
+		httptrace.ContextClientTrace(request.Context()).WroteRequest(httptrace.WroteRequestInfo{})
+		return nil, errors.New("fixture transport failure")
+	})
+	client := adapter.client
+	adapter.client = httpDoerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host != "range.test" {
+			trace := httptrace.ContextClientTrace(request.Context())
+			trace.TLSHandshakeStart()
+			time.Sleep(3 * time.Millisecond)
+			trace.TLSHandshakeDone(tls.ConnectionState{}, nil)
+			trace.GotFirstResponseByte()
+		}
+		return client.Do(request)
+	})
+	_, err := adapter.HashFileRange(context.Background(), fixtureCredential(), FileRangeRequest{
+		File: File{ID: "789", PickCode: fixtureDownloadPickCode, Size: 1024}, Range: ByteRange{Start: 0, End: 9},
+	})
+	if !errors.Is(err, ErrProviderUnavailable) {
+		t.Fatalf("error=%v", err)
+	}
+	var sourceLog string
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, "code=provider_operation_completed stage=source_range ") {
+			sourceLog = line
+		}
+	}
+	for _, want := range []string{"networkPhase=waiting_headers", "statusCode=0", "tlsMs=0", "firstByteMs=0"} {
+		if !strings.Contains(sourceLog, want) {
+			t.Errorf("Range diagnostics include control-request timing: missing %s in %s", want, sourceLog)
+		}
+	}
+	for _, secret := range []string{fixtureCredential().Cookie, "range.test", "provider.test", "encrypted-request"} {
+		if strings.Contains(output.String(), secret) {
+			t.Errorf("diagnostic log exposed fixture secret")
+		}
+	}
+}
 
 // TestRangeDiagnosticIdentifiesValidationFailure preserves exact bounded Range
 // validation and reports its failure without exposing signed URLs or bodies.
@@ -69,17 +131,24 @@ func TestNestedOperationFailureKeepsDownloadStage(t *testing.T) {
 func TestOperationTraceRecordsOnlyTiming(t *testing.T) {
 	ctx, o := observeOperation(context.Background(), "source_parent")
 	trace := httptrace.ContextClientTrace(ctx)
+	// Synchronous fake hooks can share one clock tick. Model elapsed time
+	// explicitly so this checks measured durations rather than clock resolution.
+	const elapsed = time.Millisecond
+	o.started = o.started.Add(-elapsed)
 	trace.DNSStart(httptrace.DNSStartInfo{Host: "fixture-secret"})
+	o.dnsStarted = o.dnsStarted.Add(-elapsed)
 	trace.DNSDone(httptrace.DNSDoneInfo{})
 	trace.ConnectStart("tcp", "fixture-secret")
+	o.connectStarted = o.connectStarted.Add(-elapsed)
 	trace.ConnectDone("tcp", "fixture-secret", nil)
 	trace.TLSHandshakeStart()
+	o.tlsStarted = o.tlsStarted.Add(-elapsed)
 	trace.TLSHandshakeDone(tls.ConnectionState{}, nil)
 	trace.GotConn(httptrace.GotConnInfo{Reused: true})
 	trace.WroteRequest(httptrace.WroteRequestInfo{})
 	trace.GotFirstResponseByte()
 	if o.firstByte <= 0 || o.dns <= 0 || o.connect <= 0 || o.tls <= 0 || !o.reused || o.phase != "response" {
-		t.Fatal("missing trace timing")
+		t.Fatalf("missing trace timing: dns=%s connect=%s tls=%s firstByte=%s reused=%t phase=%s", o.dns, o.connect, o.tls, o.firstByte, o.reused, o.phase)
 	}
 	if err := o.finish(nil); err != nil {
 		t.Fatal(err)
@@ -101,6 +170,7 @@ func TestDownloadPolicyDiagnosticDoesNotLeakTarget(t *testing.T) {
 		{ErrProviderRateLimited, "provider_rate_limited"},
 		{ErrProviderRiskControl, "provider_risk_control"},
 		{ErrSourceDirectoryTimeout, "source_directory_timeout"},
+		{ErrSourceRangeTimeout, "source_range_timeout"},
 		{ErrProviderUnavailable, "provider_unavailable"},
 	} {
 		_, o := observeOperation(context.Background(), "download_url")

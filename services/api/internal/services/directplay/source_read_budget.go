@@ -18,13 +18,13 @@ func (s *Service) sourcePathResolveLimit() time.Duration {
 	return p115.SourceDirectoryResolveTimeout
 }
 
-// sourceRangeReadLimit keeps HashFileRange on the original 5s source-range
-// budget. The same test seam shortens it for local timeout tests.
+// sourceRangeReadLimit covers two independently bounded 5s HTTP phases without
+// extending the caller's total acceleration deadline. The seam shortens the total.
 func (s *Service) sourceRangeReadLimit() time.Duration {
 	if s.sourceReadBudget > 0 {
 		return s.sourceReadBudget
 	}
-	return sourceReadTimeout
+	return p115.SourceRangeReadTimeout
 }
 
 // sourceReadResult distinguishes Ember's optional acceleration budget from a
@@ -36,5 +36,7 @@ func sourceReadResult(parent, read context.Context, err error) error {
 	if errors.Is(read.Err(), context.DeadlineExceeded) || errors.Is(err, p115.ErrSourceDirectoryTimeout) {
 		return ErrSourceReadTimeout
 	}
+	// An adapter phase timeout remains typed until reportProviderFailure maps
+	// it, so its safe download_url/source_range detail survives into Gateway logs.
 	return err
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/konghang/ember/backend/internal/common/upstream"
 	"github.com/konghang/ember/backend/internal/integrations/p115/p115cipher"
+	"github.com/konghang/ember/backend/internal/logging"
 )
 
 const (
@@ -65,6 +66,7 @@ type CookieHTTPAdapter struct {
 	sourceResolvePageSize   int
 	sourceResolveMaxEntries int
 	sourceFlights           sourceDirectoryFlights
+	sourceRangePhaseBudget  time.Duration // Test seam for independent read-only phase deadlines.
 	limiter                 *accountRateLimiter
 }
 
@@ -607,6 +609,9 @@ func (a *CookieHTTPAdapter) GetDownloadURL(ctx context.Context, credential Crede
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxCookieResponseBody+1))
 	if err != nil {
+		if ctx.Err() != nil {
+			return DownloadURLResult{}, ctx.Err()
+		}
 		return DownloadURLResult{}, protocolError("download response read failed")
 	}
 	if len(body) > maxCookieResponseBody {
@@ -639,15 +644,16 @@ func (a *CookieHTTPAdapter) GetDownloadURL(ctx context.Context, credential Crede
 	return parseDownloadURL(rawURL, a.now().UTC(), a.downloadHostAllowed)
 }
 
-// HashFileRange fetches exactly one bounded source range and returns its SHA1
-// without exposing the signed URL, Cookie, or source bytes to business code.
+// HashFileRange gives signed-URL preparation and the bounded CDN read separate
+// deadlines; only SHA1 and byte count leave the provider boundary.
 func (a *CookieHTTPAdapter) HashFileRange(
 	ctx context.Context,
 	credential Credential,
 	request FileRangeRequest,
 ) (result FileRangeHash, resultErr error) {
-	ctx, observation := observeOperation(ctx, "source_range")
-	defer func() { resultErr = observation.finish(resultErr) }()
+	if err := ctx.Err(); err != nil {
+		return FileRangeHash{}, err
+	}
 	if _, err := validateCookieHTTPCredential(credential); err != nil {
 		return FileRangeHash{}, err
 	}
@@ -659,14 +665,44 @@ func (a *CookieHTTPAdapter) HashFileRange(
 	if request.UserAgent != "" {
 		rangeUserAgent = request.UserAgent
 	}
-	download, err := a.GetDownloadURL(ctx, credential, DownloadURLRequest{
+	started := time.Now()
+	var downloadDuration, rangeDuration time.Duration
+	defer func() {
+		logging.Debugf("[P115] code=source_range_completed sourceDownloadMs=%d rangeReadMs=%d durationMs=%d success=%t",
+			downloadDuration.Milliseconds(), rangeDuration.Milliseconds(), time.Since(started).Milliseconds(), resultErr == nil)
+	}()
+	phaseLimit := a.sourceRangePhaseLimit()
+	totalCtx, cancelTotal := context.WithTimeout(ctx, 2*phaseLimit)
+	defer cancelTotal()
+	downloadCtx, cancelDownload := context.WithTimeout(totalCtx, phaseLimit)
+	downloadStarted := time.Now()
+	download, err := a.GetDownloadURL(downloadCtx, credential, DownloadURLRequest{
 		PickCode:  request.File.PickCode,
 		UserAgent: rangeUserAgent,
 	})
+	downloadDuration = time.Since(downloadStarted)
+	err = sourceRangeStageResult(ctx, downloadCtx, err)
+	cancelDownload()
 	if err != nil {
 		return FileRangeHash{}, err
 	}
+	rangeCtx, cancelRange := context.WithTimeout(totalCtx, phaseLimit)
+	defer cancelRange()
+	rangeStarted := time.Now()
+	result, resultErr = a.readFileRange(rangeCtx, credential, request, download, rangeUserAgent, expectedBytes)
+	rangeDuration = time.Since(rangeStarted)
+	resultErr = sourceRangeStageResult(ctx, rangeCtx, resultErr)
+	if resultErr != nil {
+		return FileRangeHash{}, resultErr
+	}
+	return result, nil
+}
 
+// readFileRange observes only the CDN request and validates exact status,
+// encoding, range and length before hashing, including cancellation during body reads.
+func (a *CookieHTTPAdapter) readFileRange(ctx context.Context, credential Credential, request FileRangeRequest, download DownloadURLResult, userAgent string, expectedBytes int64) (result FileRangeHash, resultErr error) {
+	ctx, observation := observeOperation(ctx, "source_range")
+	defer func() { resultErr = observation.finish(resultErr) }()
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, download.URL, nil)
 	if err != nil {
 		return FileRangeHash{}, protocolError("range request build failed")
@@ -674,7 +710,7 @@ func (a *CookieHTTPAdapter) HashFileRange(
 	httpRequest.Header.Set("Accept", "*/*")
 	httpRequest.Header.Set("Accept-Encoding", "identity")
 	httpRequest.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", request.Range.Start, request.Range.End))
-	httpRequest.Header.Set("User-Agent", rangeUserAgent)
+	httpRequest.Header.Set("User-Agent", userAgent)
 	switch download.HeaderMode {
 	case DownloadHeadersNone, DownloadHeadersSameUserAgent:
 	case DownloadHeadersSameUserAgentAndCookie:
