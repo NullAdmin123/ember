@@ -1389,6 +1389,8 @@ func providerFailureCode(err error) string {
 		return "provider_risk_control"
 	case errors.Is(err, p115integration.ErrDataPlaneQueueLimited):
 		return "data_plane_queue_limited"
+	case errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, ErrSourceReadTimeout):
+		return "source_directory_timeout"
 	default:
 		return "provider_protocol"
 	}

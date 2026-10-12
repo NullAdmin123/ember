@@ -336,6 +336,8 @@ func providerContractFailure(stage string, err error) error {
 	return contractFailure(stage, providerContractErrorCode(err), err)
 }
 
+// providerContractErrorCode maps every stable Provider sentinel to a fixed
+// checker code. Unknown errors stay "unknown" instead of leaking text.
 func providerContractErrorCode(err error) string {
 	switch {
 	case errors.Is(err, context.Canceled):
@@ -360,8 +362,16 @@ func providerContractErrorCode(err error) string {
 		return "provider_rejected"
 	case errors.Is(err, ErrProviderUnavailable):
 		return "provider_unavailable"
+	case errors.Is(err, ErrProviderRateLimited):
+		return "provider_rate_limited"
+	case errors.Is(err, ErrProviderRiskControl):
+		return "provider_risk_control"
+	case errors.Is(err, ErrDataPlaneQueueLimited):
+		return "data_plane_queue_limited"
 	case errors.Is(err, ErrProviderProtocol):
 		return "provider_protocol"
+	case errors.Is(err, ErrSourceDirectoryTimeout):
+		return "source_directory_timeout"
 	case errors.Is(err, ErrSourceDirectoryTooLarge):
 		return "source_directory_too_large"
 	case errors.Is(err, ErrSourceFileAmbiguous):

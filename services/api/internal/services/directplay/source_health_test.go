@@ -114,6 +114,9 @@ func TestRateLimitAndRiskControlStayAccountWideButNeverExpire(t *testing.T) {
 	if _, ok := runtimeHealthOutcome(failureOperationResolveSourcePath, p115.ErrSourceDirectoryTimeout); ok {
 		t.Fatal("directory timeout must not write account health")
 	}
+	if code := providerFailureCode(p115.ErrSourceDirectoryTimeout); code != "source_directory_timeout" {
+		t.Fatalf("directory timeout task code=%s, want source_directory_timeout", code)
+	}
 }
 
 // TestLocalQueueLimitDoesNotWriteHealthOrShareRateLimitCode keeps MaxWait

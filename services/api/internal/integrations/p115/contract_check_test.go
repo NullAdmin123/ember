@@ -3,6 +3,7 @@ package p115
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -142,6 +143,46 @@ func TestRunReadOnlyContractCheckMapsProviderErrorsWithoutProviderText(t *testin
 	stage, code := ContractCheckFailure(err)
 	if stage != "source_credential" || code != "credential_rejected" {
 		t.Fatalf("ContractCheckFailure() stage=%q code=%q error=%v", stage, code, err)
+	}
+}
+
+func TestProviderContractErrorCodeMapsNewSentinels(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{ErrProviderRateLimited, "provider_rate_limited"},
+		{ErrProviderRiskControl, "provider_risk_control"},
+		{ErrDataPlaneQueueLimited, "data_plane_queue_limited"},
+		{ErrSourceDirectoryTimeout, "source_directory_timeout"},
+		{ErrProviderUnavailable, "provider_unavailable"},
+		{errors.New("fixture-unclassified"), "unknown"},
+	}
+	for _, test := range tests {
+		if got := providerContractErrorCode(test.err); got != test.want {
+			t.Fatalf("providerContractErrorCode(%v) = %q, want %q", test.err, got, test.want)
+		}
+	}
+}
+
+func TestRunReadOnlyContractCheckMapsRateLimitedAndSiblingSentinels(t *testing.T) {
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{ErrProviderRateLimited, "provider_rate_limited"},
+		{ErrProviderRiskControl, "provider_risk_control"},
+		{ErrDataPlaneQueueLimited, "data_plane_queue_limited"},
+		{ErrSourceDirectoryTimeout, "source_directory_timeout"},
+	}
+	for _, test := range tests {
+		provider := newFakeReadOnlyContractProvider()
+		provider.validateErr = test.err
+		_, err := RunReadOnlyContractCheck(context.Background(), provider, fixtureContractCheckInput())
+		stage, code := ContractCheckFailure(err)
+		if stage != "source_credential" || code != test.want || code == "unknown" {
+			t.Fatalf("%v stage=%q code=%q, want source_credential/%s", test.err, stage, code, test.want)
+		}
 	}
 }
 

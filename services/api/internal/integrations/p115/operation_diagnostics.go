@@ -162,12 +162,16 @@ func (o *operationObservation) finish(err error) error {
 			reason = strings.NewReplacer(" ", "_", "-", "_").Replace(protocol.reason)
 		case errors.Is(err, ErrProviderRejected):
 			reason = "provider_rejected"
+		case errors.Is(err, ErrProviderUnavailable):
+			reason = "provider_unavailable"
 		case errors.Is(err, ErrProviderRateLimited):
 			reason = "provider_rate_limited"
 		case errors.Is(err, ErrProviderRiskControl):
 			reason = "provider_risk_control"
 		case errors.Is(err, ErrDataPlaneQueueLimited):
 			reason = "data_plane_queue_limited"
+		case errors.Is(err, ErrSourceDirectoryTimeout):
+			reason = "source_directory_timeout"
 		case errors.Is(err, ErrCredentialRejected):
 			reason = "credential_rejected"
 		case errors.Is(err, context.DeadlineExceeded):

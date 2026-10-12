@@ -556,7 +556,7 @@ playbackAccountId + SHA1 + size
 
 真实验证必须由用户明确授权，使用测试账号和测试文件，并以一次性命令执行；不能启动 Ember 服务或后台进程作为验证手段。每次记录日期、平台、Infuse 当前稳定版本、脱敏请求字段和结果。
 
-仓库提供 `go -C services/api run ./cmd/p115-contract-check` 作为只读入口，具体环境变量、安全确认值、执行和清理步骤见 [115 Cookie Provider 一次性只读合同验证](../runbooks/p115-read-only-contract-check.md)。该命令使用不含 `InitRapidUpload` / `DeleteFile` 的窄接口，不连接 Ember 数据库；自动化测试只注入 fake Provider，禁止在测试中调用真实 115。URL 安全策略失败时允许额外输出类型化的 reason、scheme 和 hostname，用于根据真实证据修订 allowlist，仍禁止输出任何可复用 URL 部分。
+仓库提供 `go -C services/api run ./cmd/p115-contract-check` 作为只读入口，具体环境变量、安全确认值、执行和清理步骤见 [115 Cookie Provider 一次性只读合同验证](../runbooks/p115-read-only-contract-check.md)。该命令使用不含 `InitRapidUpload` / `DeleteFile` 的窄接口，不连接 Ember 数据库；自动化测试只注入 fake Provider，禁止在测试中调用真实 115。失败 `code` 与写入检查器共用 `providerContractErrorCode`：HTTP 429 是 `provider_rate_limited`，本地排队是 `data_plane_queue_limited`，目录预算耗尽是 `source_directory_timeout`，保留风控哨兵是 `provider_risk_control`，不得落成 `unknown`。URL 安全策略失败时允许额外输出类型化的 reason、scheme 和 hostname，用于根据真实证据修订 allowlist，仍禁止输出任何可复用 URL 部分。
 
 受控写入验证使用独立命令 `go -C services/api run ./cmd/p115-transfer-contract-check` 和更强的显式确认值，按本合同 §8.1 执行“playback 单进程二次查重 → 秒传/单次 challenge → 目标复核 → playback downurl → playback 128 KiB Range → retained=true”。命令明确声明文件会保留在 playback 专用目录，报告 `cleanup.attempted=false`，且接口层不持有 `DeleteFile` 能力；具体步骤见 [115 playback 保留式秒传合同验证](../runbooks/p115-retained-transfer-contract-check.md)。该命令不连接 PostgreSQL，不能把二次查重结果表述为生产唯一约束/advisory lock 已验证。
 

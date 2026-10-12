@@ -811,7 +811,7 @@ Telegram 账号绑定与 Bot 自助能力服务。
 - DirectPlay 每次入口返回仅用于日志的 Timing 快照，成功/失败均附在 Gateway 单条最终决策日志：directPlayMs、prepare/sourceResolve/targetSearch/lockWait/preID/rapidUpload/challenge/targetVerify/transferCommit/downloadURL 的 Ms 与 Calls，以及未分类 otherMs；重复调用累计，未执行阶段省略。使用单调时钟，不改业务时区或控制流。源目录共享任务 Debug 另含 parentResolveMs/listMs/listPages；统计解释见端到端流程第 8.3 节，Gateway durationMs 不等于首帧耗时
 - `integrations/p115/p115cipher`：基于固定提交黑盒输出独立实现上传 `k_ec`/AES-CBC/LZ4、完整签名表单和下载 RSA request/response 变换；上传响应兼容完整 AES blocks 后的 1 至 15 字节短尾部，以及 LZ4 剩余 1–2 字节/零长度头终止语义，没有完整 AES block 或正数截断 LZ4 block 时失败关闭；固定向量不含真实账号信息
 - `integrations/p115.Provider`：账号验证、上传信息、源路径解析、SHA1 搜索、秒传初始化、目标复核、下载地址、受限 Range Hash 和串行删除的 Cookie 实现均已有 fake HTTP 合同；2026-08-22 本地真实检查已通过 source 只读链路，以及 playback `range_challenge → reused → 目标复核 → downurl → 128 KiB Range` 保留式写入链路
-- `cmd/p115-contract-check`：只组合 Provider 的六个只读方法；凭证仅从当前进程环境读取，CI 或缺少确认值时拒绝运行，报告不包含可复用凭证、完整文件身份或签名 URL
+- `cmd/p115-contract-check`：只组合 Provider 的六个只读方法；凭证仅从当前进程环境读取，CI 或缺少确认值时拒绝运行，报告不包含可复用凭证、完整文件身份或签名 URL。失败码与 `p115-transfer-contract-check` 共用 `providerContractErrorCode`，覆盖 `provider_rate_limited` / `provider_risk_control` / `data_plane_queue_limited` / `source_directory_timeout`，429 不得写成 `unknown`
 - `cmd/p115-transfer-contract-check`：单进程执行 playback 目录解析、双重查重、preID、零/一次 challenge、目标复核、playback 下载 URL/Range 和保留报告；不含 `DeleteFile`、不连接数据库，明确输出 `databaseLockValidated=false` 与 `cleanup.attempted=false`
 - `security/secretbox`：复用 ConfigService 历史 AES-GCM 密文格式，已有 settings 密文保持兼容；115 Cookie 通过 `p115-cookie` purpose 派生独立密钥，禁止与 settings 密文跨用途替换
 - `p115_accounts` 存储使用局部静默 GORM session，避免 PostgreSQL 失败行详情携带 Cookie 密文；错误日志只保留操作名、SQLSTATE 和约束名

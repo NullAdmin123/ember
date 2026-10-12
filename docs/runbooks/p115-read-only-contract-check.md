@@ -109,6 +109,8 @@ P115_CHECK_EXIT=$?
 p115 contract check failed: stage=<stage> code=<code>
 ```
 
+`code` 与 `p115-transfer-contract-check` 共用 `providerContractErrorCode`。HTTP 429 必须是 `provider_rate_limited`，不能写成 `unknown`。稳定码还包括 `provider_risk_control`、`data_plane_queue_limited`、`source_directory_timeout`，以及既有的 `credential_rejected` / `provider_unavailable` / `provider_protocol`。
+
 如果下载 URL 被安全策略拒绝，会额外输出一行不可复用的合同证据：
 
 ```text

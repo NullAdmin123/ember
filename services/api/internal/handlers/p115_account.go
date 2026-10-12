@@ -235,7 +235,9 @@ func handleP115AccountError(c *gin.Context, err error) {
 		errors.Is(err, p115accountpkg.ErrPersonalAccountAlreadyExists):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	case errors.Is(err, p115integration.ErrProviderUnavailable),
-		errors.Is(err, p115integration.ErrProviderProtocol):
+		errors.Is(err, p115integration.ErrProviderProtocol),
+		errors.Is(err, p115integration.ErrProviderRateLimited),
+		errors.Is(err, p115integration.ErrProviderRiskControl):
 		c.JSON(http.StatusBadGateway, gin.H{"error": "115 服务暂不可用"})
 	case errors.Is(err, p115accountpkg.ErrPersonalPlanPolicyUnavailable):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
