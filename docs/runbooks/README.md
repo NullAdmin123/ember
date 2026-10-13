@@ -10,6 +10,7 @@
 - [部署环境与配置](./deployment-environment.md) - 必填变量、迁移策略、管理员初始化
 - [数据库 Migration Baseline](./database-migration-baseline.md) - baseline 生成、验证与旧迁移归档流程
 - [部署排障](./deployment-troubleshooting.md) - 部署失败时的检查动作和恢复动作
+- [Gateway 抓包与播放排查](./gateway-packet-capture.md) - 可跨机器复用的 SSH 采集、日志过滤、离线 HTTP/TLS 分析与历史样本
 - [测试指南](./testing.md) - 测试入口与最短验证路径
 - [集成测试手册](./integration-testing.md) - API 集成测试、未来 Web+API 联测与结果产物约定
 - [手工测试清单](./manual-testing-checklist.md) - 按变更范围选跑的手工回归清单

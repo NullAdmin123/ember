@@ -15,6 +15,7 @@
 
 - 全量配置与环境变量字典：看 [docs/reference/configuration-reference.md](./reference/configuration-reference.md)
 - 详细部署与排障步骤：看 [docs/runbooks/deployment.md](./runbooks/deployment.md)、[docs/runbooks/deployment-environment.md](./runbooks/deployment-environment.md)、[docs/runbooks/deployment-troubleshooting.md](./runbooks/deployment-troubleshooting.md)
+- Gateway 包端证据：看 [Gateway 抓包与播放排查](./runbooks/gateway-packet-capture.md)；`scripts/gateway-capture/` 为独立 Python 标准库工具，不属于服务运行时，真实采集须显式执行，离线分析不连接外部系统
 - 115 Cookie 账号到 Infuse/Emby/115 CDN 的完整链路图：看 [docs/reference/p115-playback-end-to-end-flow.md](./reference/p115-playback-end-to-end-flow.md)
 
 当前主文档中的大块枚举型内容已迁移到 `docs/reference/`；后续以目录入口收尾、引用校正和归档准备为主。

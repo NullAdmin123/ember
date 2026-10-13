@@ -151,6 +151,8 @@ docker compose --profile gateway logs --tail=200 redis ember-gateway
 
 #### 慢起播、重复 GET 与播放名额异常
 
+需要包端证据时使用 [Gateway 抓包与播放排查](./gateway-packet-capture.md)：脚本位于 `scripts/gateway-capture/`，支持参数化 SSH 跳板、已有容器 PID 发现与离线分析，原始包和分析产物放在仓库外。
+
 preID/challenge 读取使用独立的源取链和 CDN Range 窗口，各最多 5 秒、整次读取最多 10 秒，并继续受加速总 deadline 与客户端取消约束。查看 Debug `source_range_completed sourceDownloadMs/rangeReadMs/durationMs`，再对照各自的 `provider_operation_completed stage=download_url|source_range`：前者区分取链与实际读取，后者区分 DNS、建连、TLS、等待响应头等阶段。取链失败时不会继续请求 CDN；本地预算耗尽仍为 `source_read_timeout`，不应据此判定账号失效。旧版本的 `source_range` trace 包含内嵌取链回调，不能直接把其 `firstByteMs/connectMs` 当作单次 CDN 请求指标；先核对部署提交与合同文档。
 
 在设置中心临时开启 `LOG_LEVEL=debug`，等待至少 5 秒后分别复现“仅打开详情”和“点击播放直到出画，再停止”。记录客户端版本、平台、部署提交及操作时间，不收集原始鉴权 Header、事件 body 或 CDN URL。
