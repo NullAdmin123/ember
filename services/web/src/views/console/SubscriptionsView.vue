@@ -866,6 +866,7 @@ onMounted(fetchData)
           <img
             :src="getImageUrl(manualTarget.posterPath)"
             :alt="`${formatSubscriptionTitle(manualTarget)} 海报`"
+            loading="lazy"
             class="h-36 w-24 flex-shrink-0 rounded-xl bg-gray-100 object-cover shadow-sm"
           />
           <div class="min-w-0 flex-1 space-y-3">
@@ -988,6 +989,7 @@ onMounted(fetchData)
           <img
             :src="getImageUrl(resubmitTarget.posterPath)"
             :alt="`${formatSubscriptionTitle(resubmitTarget)} 海报`"
+            loading="lazy"
             class="block w-full rounded-xl bg-gray-100 shadow-md"
           />
         </div>

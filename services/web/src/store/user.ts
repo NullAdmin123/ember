@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import * as consoleApi from '@/api/console'
 import type {
-  MediaStats,
   UserInfo
 } from '@/types/api'
 
@@ -10,7 +9,6 @@ export const useUserStore = defineStore('user', () => {
   // P2-5：user store.profile 是 role/passwordResetRequired 的单一事实源，
   // auth store 的对应字段从 profile 派生，不再需要双向同步。
   const profile = ref<UserInfo | null>(null)
-  const mediaStats = ref<MediaStats | null>(null)
   const embyUrl = ref<string>('')
   // embyConfigured 表示系统级 Emby 集成是否齐全（URL + API Key）。
   // 默认 true，避免首次进入 dashboard 在探测请求返回前误显示"未配置"空态。
@@ -56,12 +54,6 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
-  const fetchMediaStats = async () => {
-    const res = await consoleApi.getMediaStats()
-    mediaStats.value = res.data
-    return res.data
-  }
-
   const fetchEmbyConfig = async () => {
     const res = await consoleApi.getEmbyConfig()
     // 兼容：老协议无 configured 字段时按 url 是否为空兜底，确保渐进升级期间行为一致。
@@ -73,14 +65,12 @@ export const useUserStore = defineStore('user', () => {
 
   const clearUserData = () => {
     profile.value = null
-    mediaStats.value = null
     clearEmbyUrl()
     embyConfigured.value = true
   }
 
   return {
     profile,
-    mediaStats,
     embyUrl,
     embyConfigured,
     setProfile,
@@ -91,7 +81,6 @@ export const useUserStore = defineStore('user', () => {
     fetchProfile,
     updateEmail,
     updatePassword,
-    fetchMediaStats,
     fetchEmbyConfig,
     clearUserData
   }

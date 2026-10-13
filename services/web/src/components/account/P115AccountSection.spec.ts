@@ -2,7 +2,7 @@ import { defineComponent, h } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import P115AccountView from './P115AccountView.vue'
+import P115AccountSection from './P115AccountSection.vue'
 import type { PersonalP115Account } from '@/types/api'
 import {
   createPersonalP115Account,
@@ -95,7 +95,7 @@ function personalAccount(overrides: Partial<PersonalP115Account> = {}): Personal
 }
 
 function mountView() {
-  return mount(P115AccountView, {
+  return mount(P115AccountSection, {
     global: {
       directives: {
         loading: {
@@ -120,7 +120,7 @@ function findButton(wrapper: ReturnType<typeof mountView>, label: string) {
   return button!
 }
 
-describe('P115AccountView', () => {
+describe('P115AccountSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(createPersonalP115Account).mockResolvedValue(personalAccount())

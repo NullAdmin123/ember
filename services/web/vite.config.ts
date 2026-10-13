@@ -81,6 +81,7 @@ export default defineConfig({
 
           return undefined
         },
+        experimentalMinChunkSize: 5000,
       },
     },
   },

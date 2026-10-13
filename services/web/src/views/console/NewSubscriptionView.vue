@@ -366,7 +366,7 @@ const isConfirmDisabled = () => {
     >
       <div v-if="selectedItem" class="flex flex-col gap-5 sm:flex-row sm:items-start sm:gap-6">
         <div class="mx-auto w-44 flex-shrink-0 sm:mx-0 sm:w-48 md:w-52">
-          <img :src="getImageUrl(selectedItem.posterPath)" :alt="`${selectedItem.title} 海报`" class="block w-full rounded-xl bg-gray-100 shadow-md" />
+          <img :src="getImageUrl(selectedItem.posterPath)" :alt="`${selectedItem.title} 海报`" loading="lazy" class="block w-full rounded-xl bg-gray-100 shadow-md" />
         </div>
         <div class="min-w-0 flex-1 space-y-4">
           <div>

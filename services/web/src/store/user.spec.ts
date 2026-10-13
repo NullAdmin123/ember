@@ -7,14 +7,12 @@ import { createPinia, setActivePinia } from 'pinia'
 const updatePasswordApiMock = vi.fn()
 const getProfileMock = vi.fn()
 const updateEmailApiMock = vi.fn()
-const getMediaStatsMock = vi.fn()
 const getEmbyConfigMock = vi.fn()
 
 vi.mock('@/api/console', () => ({
   updatePassword: (...args: unknown[]) => updatePasswordApiMock(...args),
   getProfile: (...args: unknown[]) => getProfileMock(...args),
   updateEmail: (...args: unknown[]) => updateEmailApiMock(...args),
-  getMediaStats: (...args: unknown[]) => getMediaStatsMock(...args),
   getEmbyConfig: (...args: unknown[]) => getEmbyConfigMock(...args),
   getConsoleAccountLinks: vi.fn(async () => ({ data: [] })),
 }))

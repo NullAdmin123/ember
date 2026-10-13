@@ -11,7 +11,7 @@ import {
 import EmberFormDialog from '@/components/ember/forms/EmberFormDialog.vue'
 import EmberEmptyStateCard from '@/components/ember/feedback/EmberEmptyStateCard.vue'
 import EmberSegmentTabs from '@/components/ember/layout/EmberSegmentTabs.vue'
-import P115AccountView from './P115AccountView.vue'
+import P115AccountSection from '@/components/account/P115AccountSection.vue'
 import { formatDateTime } from '@/utils/date'
 import { isConflictError } from '@/utils/api-error'
 import { copyToClipboard as copyTextToClipboard } from '@/utils/clipboard'
@@ -665,7 +665,7 @@ onMounted(() => {
               </RouterLink>
             </template>
           </EmberEmptyStateCard>
-          <P115AccountView v-else />
+          <P115AccountSection v-else />
         </div>
         <!-- 基本资料：账号信息、邮箱、Telegram 绑定与管理员 Emby 关联。 -->
         <div

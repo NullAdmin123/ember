@@ -430,6 +430,7 @@ onBeforeUnmount(() => {
             <img
               :src="getPosterUrl(row.posterItemId)"
               :alt="`${row.name} 封面`"
+              loading="lazy"
               class="h-20 w-14 rounded-md border border-gray-200 bg-gray-50 object-cover"
               @error="(e: Event) => (((e.target as HTMLImageElement).src = placeholderPoster))"
             />
@@ -487,6 +488,7 @@ onBeforeUnmount(() => {
             <img
               :src="getPosterUrl(row.posterItemId)"
               :alt="`${row.name} 封面`"
+              loading="lazy"
               class="h-20 w-14 rounded-md border border-gray-200 bg-gray-50 object-cover"
               @error="(e: Event) => (((e.target as HTMLImageElement).src = placeholderPoster))"
             />
