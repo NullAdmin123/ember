@@ -1,6 +1,6 @@
 # `docs/plan` 盘点清单
 
-> 更新时间：2026-10-08（分组观看保号已实现，本地验证收尾中，保留真实验收边界）
+> 更新时间：2026-10-14（SenPlayer 原文件播放兼容实现与本地验证完成，待实机验收）
 
 本清单只回答三件事：
 
@@ -97,6 +97,8 @@
 
 2026-09-17 文档复核：上述通过记录只覆盖对应历史批次；当时 9 月 12 日新增账号配置版本与成功记录优化的 PostgreSQL 用例尚未执行。2026-09-21 已补跑 DirectPlay PostgreSQL 专项并全部通过，详见 [网关总计划的验证记录](../plan/architecture/emby-115-direct-play-gateway.md)；真实 Redis/115/客户端验收仍未完成。2026-09-22 增补起播许可、2026-09-29 完成每日播放总结计划归档、2026-10-04 新增套餐与分组权益改版、分组观看保号计划后，当前 `docs/plan/` 保留以下 11 份。
 
+2026-10-14 增补：计入 2026-10-08 的群签到计划和本次 [SenPlayer 原文件播放兼容](../plan/architecture/senplayer-original-stream-compatibility.md)，当前共 13 份实施稿。SenPlayer 的版本化协议、MKV 抓包及受限适配实现已完成，用户选择保留预读不新增转存；Go 非集成全量、关键三包 race、vet/build 和抓包工具 17 项测试通过。实现与本地验证在 master 完成，尚未部署，不能把本轮 Emby 回退样本写成 115 加速验收。
+
 | 文档 | 盘点结论 | 主要证据或剩余项 | 建议动作 |
 |------|----------|------------------|----------|
 | `access-auth/registration-user-capacity.md` | 继续保留 | 未发现 `registration_user_limit` 配置、容量统计或注册门控实现 | 保留在 `docs/plan/access-auth/` |
@@ -107,6 +109,8 @@
 | `architecture/runtime-settings-cache-evolution.md` | 继续保留 | 明确处于观察期；尚无替换启动条件实证，也未决定 Go 1.24 基线 | 保留在 `docs/plan/architecture/` |
 | `architecture/p115-transfer-playback-intent.md` | 代码与自动化完成，待受控客户端验收 | Gateway 严格起播意图、短期许可、DirectPlay 锁内新增转存门控已落地；已有文件与跨会话缓存保留；全量非集成 Go、关键 race、vet/build 通过 | 受控客户端验收完成或用户接受未验证边界后归档 |
 | `bot-telegram/notification-mute-rules.md` | 继续保留 | 未发现 `notification_rules` 模型、migration、API 或 Bot 统一决策实现 | 保留在 `docs/plan/bot-telegram/` |
+| [bot-telegram/group-checkin-retention.md](../plan/bot-telegram/group-checkin-retention.md) | 规则已确认，待实施 | 2026-10-08 计划记录观看或签到任一达标、共用周期与签到门槛；不将方案记录视为实现证据 | 保留在 `docs/plan/bot-telegram/` |
+| [architecture/senplayer-original-stream-compatibility.md](../plan/architecture/senplayer-original-stream-compatibility.md) | 实现与本地验证完成，待实机验收 | MKV 受限原文件匹配、现有目标复用与无许可零转存写入回归完成，MP4/HEAD/Size=0 原规则受保护；Go 非集成/race/vet/build 与抓包工具测试通过；尚未部署 | 按授权部署，完成 SenPlayer 302/CDN/字幕与播放分项验收后归档 |
 | `console-admin/device-risk-automation.md` | 继续保留 | 未发现 `device_risk_events`、扫描服务、配置或风险 UI | 保留在 `docs/plan/console-admin/` |
 | `console-admin/in-app-notification-center.md` | 继续保留 | 未发现通用站内通知模型、NotificationService、用户通知 API 或通知页 | 保留在 `docs/plan/console-admin/` |
 | `media-subscription/media-dedupe-and-quality-governance.md` | 继续保留 | 未发现 `media_duplicate_cache/media_duplicate_ignores` 或重复版本 API/UI | 保留在 `docs/plan/media-subscription/` |

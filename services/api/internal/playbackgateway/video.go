@@ -41,7 +41,7 @@ type videoRequestInfo struct {
 	PlaySessionID  string
 	Container      string
 	Accelerated    bool
-	OriginalMP4    bool
+	OriginalStream bool
 	FallbackStage  string
 	FallbackReason string
 }
@@ -157,7 +157,7 @@ func (gateway *Gateway) serveVideo(
 		gateway.proxyVideoFallback(writer, fallbackRequest, decision, principal, fallbackSource)
 		return
 	}
-	if info.OriginalMP4 && !originalMP4ProofMatchesRequest(request, proof) {
+	if info.OriginalStream && !originalStreamProofMatchesRequest(request, proof, info.Container) {
 		decision.Stage = "eligibility"
 		decision.ReasonCode = "media_not_direct_play"
 		gateway.proxyVideoFallback(writer, fallbackRequest, decision, principal, fallbackSource)
@@ -177,8 +177,10 @@ func (gateway *Gateway) serveVideo(
 	}
 
 	decision.MediaPath = proof.Path
-	if info.OriginalMP4 {
-		gateway.debugf("[PlaybackGateway] level=debug code=video_original_mp4_accepted requestId=%s sessionRef=%s evidence=local_mp4_proof", decision.RequestID, decision.SessionRef)
+	if info.OriginalStream {
+		// This branch only accepts the fixed mp4/mkv names, so the diagnostic
+		// codes stay bounded while preserving the existing MP4 log contract.
+		gateway.debugf("[PlaybackGateway] level=debug code=video_original_%s_accepted requestId=%s sessionRef=%s evidence=local_%s_proof", info.Container, decision.RequestID, decision.SessionRef, info.Container)
 	}
 	leaseSessionID := info.PlaySessionID
 	if proof.intentOriginSession != "" {
@@ -314,8 +316,8 @@ func (gateway *Gateway) rejectVideo(writer http.ResponseWriter, request *http.Re
 	gateway.logVideoDecision(decision)
 }
 
-// inspectVideoRequest accepts explicit static streams or the verified original
-// MP4 shape; the latter still requires additional source checks after proof lookup.
+// inspectVideoRequest accepts explicit static streams or the observed original
+// MP4/MKV shapes; those require additional source checks after proof lookup.
 // Anything ambiguous stays playable through Emby but never reaches 115.
 func inspectVideoRequest(request *http.Request) videoRequestInfo {
 	info := videoRequestInfo{FallbackStage: "route", FallbackReason: "request_not_eligible"}
@@ -342,12 +344,12 @@ func inspectVideoRequest(request *http.Request) videoRequestInfo {
 		return info
 	}
 	if !staticOK || !strings.EqualFold(staticValue, "true") {
-		// Only a completely absent Static can use the observed MP4 contract;
+		// Only a completely absent Static can use the observed original contract;
 		// false, empty and duplicate values retain their existing fallback.
-		if queryKeyExistsFold(request.URL.Query(), "Static") || !originalMP4RequestEligible(request, videoPath.StreamFileName) {
+		if queryKeyExistsFold(request.URL.Query(), "Static") || !originalStreamRequestEligible(request, videoPath.StreamFileName) {
 			return info
 		}
-		info.OriginalMP4 = true
+		info.OriginalStream = true
 	}
 	info.Accelerated = true
 	info.FallbackStage = ""
@@ -355,10 +357,15 @@ func inspectVideoRequest(request *http.Request) videoRequestInfo {
 	return info
 }
 
-// originalMP4RequestEligible limits the observed no-Static route to identity
+// originalStreamRequestEligible limits observed no-Static MP4/MKV routes to identity
 // parameters. Unknown or transformation options must retain Emby semantics.
-func originalMP4RequestEligible(request *http.Request, fileName string) bool {
-	if (request.Method != http.MethodGet && request.Method != http.MethodHead) || !strings.EqualFold(fileName, "original.mp4") {
+func originalStreamRequestEligible(request *http.Request, fileName string) bool {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		return false
+	}
+	switch strings.ToLower(fileName) {
+	case "original.mp4", "original.mkv":
+	default:
 		return false
 	}
 	query, err := url.ParseQuery(request.URL.RawQuery)
@@ -384,11 +391,12 @@ func originalMP4RequestEligible(request *http.Request, fileName string) bool {
 	return true
 }
 
-// originalMP4ProofMatchesRequest requires a local source whose actual MP4
-// container and path match the observed endpoint; it never grants transfer intent.
-func originalMP4ProofMatchesRequest(request *http.Request, proof PlaybackProof) bool {
-	if proof.IsRemote || !proof.SupportsDirectStream || !strings.EqualFold(proof.Container, "mp4") ||
-		!strings.EqualFold(path.Ext(proof.Path), ".mp4") {
+// originalStreamProofMatchesRequest checks local container/path consistency
+// after identity and DirectPlay proof validation. The new MKV exception requires
+// a known positive Size; neither format creates or extends transfer intent.
+func originalStreamProofMatchesRequest(request *http.Request, proof PlaybackProof, container string) bool {
+	if proof.IsRemote || !proof.SupportsDirectStream || !strings.EqualFold(proof.Container, container) ||
+		!strings.EqualFold(path.Ext(proof.Path), "."+container) || (container == "mkv" && proof.Size <= 0) {
 		return false
 	}
 	query := request.URL.Query()

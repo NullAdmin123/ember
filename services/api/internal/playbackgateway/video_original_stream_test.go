@@ -25,6 +25,7 @@ func TestGatewayOriginalMP4UsesExactProof(t *testing.T) {
 		{name: "HEAD", method: http.MethodHead, target: target, redirect: true},
 		{name: "matching token aliases", target: target + "&X-Emby-Token=" + fixtureAccessToken + "&api_key=" + fixtureAccessToken, redirect: true},
 		{name: "explicit static unchanged", target: target + "&Static=true", redirect: true},
+		{name: "unknown MP4 size unchanged", target: target, change: func(p *PlaybackProof) { p.Size = 0 }, redirect: true},
 		{name: "case variants", target: "/emby/VIDEOS/item-1/ORIGINAL.MP4?mediasourceid=source-1&playsessionid=session-1", redirect: true},
 		{name: "missing proof", target: target, missing: true, stage: "proof", reason: "playback_proof_missing"},
 		{name: "expired proof", target: target, expired: true, stage: "proof", reason: "playback_proof_expired"},

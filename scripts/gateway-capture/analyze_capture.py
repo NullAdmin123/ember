@@ -23,7 +23,7 @@ def reference(value):
 
 def safe_path(path):
     """Keep known playback routes; unknown paths may embed credentials and are omitted."""
-    media = r"/(?:emby/)?(?:Videos|Items)/[0-9]{1,20}/(?:PlaybackInfo|stream(?:\.[a-z0-9]{1,12})?)"
+    media = r"/(?:emby/)?(?:Videos|Items)/[0-9]{1,20}/(?:PlaybackInfo|stream(?:\.[a-z0-9]{1,12})?|original\.(?:mp4|mkv))"
     fixed = r"/(?:emby/)?(?:Sessions/Playing(?:/Progress|/Stopped)?|System/Info(?:/Public)?)"
     return path if re.fullmatch(media + "|" + fixed, path, re.I) else "[other]"
 
@@ -66,7 +66,8 @@ def http_summary(flow, timestamp, data, gateway_port=8081):
     query = parse_qs(parsed.query, keep_blank_values=True, max_num_fields=256)
     event.update(kind="request", method=method, path=safe_path(parsed.path),
                  queryKeys=sorted({key.lower() if key.lower() in _QUERY_KEYS else "other" for key in query}))
-    agent = re.search(r"\bInfuse(?:-Direct)?/[0-9.]+", headers.get("user-agent", ""))
+    agent = re.search(r"\b(?:Infuse(?:-Direct)?|SenPlayer)/[0-9]{1,5}(?:\.[0-9]{1,5}){0,4}(?![0-9.])",
+                      headers.get("user-agent", ""))
     event["client"] = agent.group(0) if agent else "other"
     value = headers.get("range", "")
     if re.fullmatch(r"bytes=(?:[0-9]+-[0-9]*|-[0-9]+)", value):

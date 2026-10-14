@@ -82,6 +82,8 @@ python3 -B scripts/gateway-capture/gateway_capture.py logs \
 
 远端先按 code/字段白名单过滤，原始 Docker 日志不传回本机。输出包括最终加速决策、源目录/取链/Range 计时、PlaybackInfo 意图状态、租约及停止事件；密码、Cookie、Token、原始 path、媒体路径、完整响应和任意 message 不输出。未知 code 或字段会被忽略；日志定义增加后需同步过滤规则。
 
+原文件匹配诊断保留固定 `video_original_mp4_accepted` / `video_original_mkv_accepted` 与 `evidence=local_mp4_proof|local_mkv_proof`；未知 evidence 丢弃。匹配诊断只证明受限路径通过媒体证明检查，不证明随后一定返回 302 或已经完成播放。
+
 ## 4. 离线分析与对照
 
 ```bash
@@ -103,6 +105,8 @@ python3 -B scripts/gateway-capture/gateway_capture.py analyze \
 | `gatewayDiagnostics` | 可选的再次过滤后的应用诊断日志；不按时间相邻自动归属并发请求 |
 
 按部署提交与客户端版本解释结果，结合 `requestId/itemId/sessionRef` 和 Range 交叉核对。PCAP 内的会话引用只在本次分析进程内一致，不等于 Gateway 自身的 `sessionRef`，也不能跨次重跑直接比较。`sourceDownloadMs/rangeReadMs` 已含在 `preIDMs/challengeMs` 中，不能重复相加；旧部署的混合 HTTP trace 边界见 [源读取诊断合同](../reference/p115-cookie-playback-contract.md#71-源读取故障诊断与预算2026-10-12)。
+
+HTTP 路径白名单已包含固定 `original.mp4`、`original.mkv`，可与 stream 系列一起形成视频请求响应配对；其他任意文件名继续显示 `[other]`。已知客户端识别包括有界 Infuse/SenPlayer 版本，未知 UA 不输出原文。2026-10-14 修复前，SenPlayer 原文件请求曾因白名单缺失被报告为 0 个视频配对；复核这类材料应使用当前工具，不能从旧结果推断没有视频请求。
 
 ## 5. 支持范围、保存与离线验证
 

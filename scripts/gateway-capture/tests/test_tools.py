@@ -40,6 +40,30 @@ def write_pcap(path, records):
 
 
 class AnalysisTests(unittest.TestCase):
+    def test_senplayer_original_streams_pair_without_exposing_credentials(self):
+        """Recognize the two supported original routes without opening unknown file names."""
+        secret = "SYNTHETIC_CREDENTIAL_MUST_NOT_APPEAR"
+        for container in ["mp4", "mkv"]:
+            with self.subTest(container=container), tempfile.TemporaryDirectory() as directory:
+                route = f"/emby/videos/123/original.{container}"
+                request = (f"GET {route}?api_key={secret}&MediaSourceId=source HTTP/1.1\r\n"
+                           f"User-Agent: SenPlayer/6.0.4 {secret}\r\nRange: bytes=10-\r\n"
+                           f"X-Emby-Token: {secret}\r\n\r\n").encode()
+                response = b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 10-25/26\r\nContent-Length: 16\r\n\r\n"
+                path = Path(directory) / "fixture.pcap"
+                write_pcap(path, [(1, packet(10000, 8081, 100, request)),
+                                  (2, packet(8081, 10000, 200, response, reverse=True))])
+                result = analyze_capture.analyze(path)
+                self.assertEqual(result["http"][0]["path"], route)
+                self.assertEqual(result["http"][0]["client"], "SenPlayer/6.0.4")
+                pairs = analyze_capture.video_pairs(result["http"])
+                self.assertEqual(len(pairs), 1)
+                self.assertEqual((pairs[0]["status"], pairs[0]["range"], pairs[0]["packetHeadersMs"]),
+                                 (206, "bytes=10-", 1000))
+                self.assertNotIn(secret, json.dumps(result))
+        self.assertEqual(analyze_capture.safe_path("/Videos/123/original.avi"), "[other]")
+        self.assertEqual(analyze_capture.safe_path(f"/Videos/123/{secret}.mkv"), "[other]")
+
     def test_nondefault_ports_reassembly_and_credential_redaction(self):
         secret = "SYNTHETIC_CREDENTIAL_MUST_NOT_APPEAR"
         body = json.dumps({"IsPlayback": True, "PlaySessionId": secret}).encode()
@@ -118,6 +142,23 @@ class AnalysisTests(unittest.TestCase):
 
 
 class CollectionTests(unittest.TestCase):
+    def test_original_stream_diagnostics_keep_only_fixed_evidence(self):
+        """Retain MP4/MKV acceptance markers while dropping arbitrary evidence and secrets."""
+        secret = "SYNTHETIC_CREDENTIAL_MUST_NOT_APPEAR"
+        prefix = "2026-01-01T00:00:00.000Z [PlaybackGateway] "
+        for container in ["mp4", "mkv"]:
+            with self.subTest(container=container):
+                code = f"video_original_{container}_accepted"
+                evidence = f"local_{container}_proof"
+                line = prefix + f"code={code} evidence={evidence} token={secret} path=/{secret}"
+                result = logs.filter_line(line)
+                self.assertIsNotNone(result)
+                self.assertEqual(result["code"], code)
+                self.assertEqual(result["evidence"], evidence)
+                self.assertNotIn(secret, json.dumps(result))
+                tampered = logs.filter_line(prefix + f"code={code} evidence={secret}")
+                self.assertNotIn("evidence", tampered)
+
     def test_capture_orchestration_keeps_partial_artifacts_and_filters_stderr(self):
         secret = "SYNTHETIC_CREDENTIAL_MUST_NOT_APPEAR"
         with tempfile.TemporaryDirectory() as directory:

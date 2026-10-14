@@ -112,6 +112,78 @@ func TestPlaybackIntentAllowsReuseBeforeAndInsideContentLock(t *testing.T) {
 	}
 }
 
+// TestSenPlayerReuseWithoutTransfer checks the actual DirectPlay pipeline with
+// the Gateway's no-permit MKV input and fake Provider, Store and Redis state.
+func TestSenPlayerReuseWithoutTransfer(t *testing.T) {
+	for _, test := range []struct {
+		name, method              string
+		existing, underLock, warm bool
+		wantErr                   error
+		permitChecks              int
+	}{
+		{name: "existing target", method: http.MethodGet, existing: true},
+		{name: "target appears under lock", method: http.MethodGet, underLock: true},
+		{name: "cross-session cached reuse", method: http.MethodGet, warm: true},
+		{name: "missing target", method: http.MethodGet, wantErr: ErrPlaybackIntentRequired, permitChecks: 1},
+		{name: "HEAD without lease", method: http.MethodHead, wantErr: ErrHeadLeaseMissing},
+		{name: "HEAD existing lease", method: http.MethodHead, warm: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			provider := newFakeProvider()
+			if test.existing || test.warm {
+				provider.searchResults = [][]p115.File{{provider.targetFile}}
+			}
+			if test.underLock {
+				provider.searchResults = [][]p115.File{{}, {provider.targetFile}}
+			}
+			leases := p115quota.NewMemoryLeaseStore()
+			service := newRoutedDirectPlayForTest(t, &fakeRoutedAccountRuntime{}, provider, leases)
+			request := routedMediaPathRequest(http.MethodGet, "session-1")
+			request.ClientUserAgent = "SenPlayer/6.0.4"
+			checks := 0
+			request.CanCreateTransfer = func() bool { checks++; return false }
+			if test.warm {
+				if candidate, err := service.ResolveMediaPath(context.Background(), request); err != nil || !candidate.Preexisting {
+					t.Fatalf("warm reuse error=%v preexisting=%t", err, candidate.Preexisting)
+				}
+				if test.method == http.MethodGet {
+					request.PlaySessionID = "session-2"
+				}
+			}
+			beforeCalls := len(provider.calls)
+			request.Method = test.method
+			candidate, err := service.ResolveMediaPath(context.Background(), request)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("ResolveMediaPath error=%v, want %v", err, test.wantErr)
+			}
+			if test.wantErr == nil && (candidate.URL == "" || !candidate.Preexisting) {
+				t.Fatal("existing MKV target was not reused")
+			}
+			if test.wantErr != nil && candidate.URL != "" {
+				t.Fatal("denied request produced a redirect")
+			}
+			if candidate.Routing.TransferChecked || checks != test.permitChecks {
+				t.Fatalf("quota checked=%t permit checks=%d", candidate.Routing.TransferChecked, checks)
+			}
+			if test.warm && len(provider.calls) != beforeCalls {
+				t.Fatal("cached reuse reached the Provider again")
+			}
+			assertNoIntentTransfer(t, service, provider)
+			accountKey, _ := service.keyDeriver.PlaybackAccountKey("100")
+			usage, err := leases.AccountUsage(context.Background(), accountKey, service.now())
+			wantOccupied := 1
+			if test.wantErr != nil {
+				wantOccupied = 0
+			} else if test.warm && test.method == http.MethodGet {
+				wantOccupied = 2
+			}
+			if err != nil || usage.OccupiedStreams != wantOccupied || usage.ActiveStreams != 0 {
+				t.Fatalf("reservation usage=%+v error=%v, want occupied=%d active=0", usage, err, wantOccupied)
+			}
+		})
+	}
+}
+
 // TestPlaybackIntentAllowsFirstTransferAndCrossSessionCacheReuse separates the
 // one-time write permission from the existing ten-minute metadata cache.
 func TestPlaybackIntentAllowsFirstTransferAndCrossSessionCacheReuse(t *testing.T) {
