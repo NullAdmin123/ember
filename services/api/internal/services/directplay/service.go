@@ -897,7 +897,6 @@ func (service *Service) resolveUnderLock(
 	}
 	if result.Status == p115integration.RapidUploadRangeChallenge {
 		if !validChallenge(result.Challenge, sourceFile.Size) {
-			service.reportRuntimeHealth(playback, p115account.RuntimeHealthProviderProtocol)
 			return service.failTask(ctx, task.ID, "challenge_invalid", "rapid upload challenge invalid", ErrProviderProtocol)
 		}
 		if err := service.markStatus(ctx, task.ID, models.PlaybackTransferTaskStatusChallenging); err != nil {
@@ -933,7 +932,6 @@ func (service *Service) resolveUnderLock(
 			return service.failTask(ctx, task.ID, providerFailureCode(err), "rapid upload retry failed", service.reportProviderFailure(ctx, playback, failureOperationRapidUploadRetry, err))
 		}
 		if result.Status == p115integration.RapidUploadRangeChallenge {
-			service.reportRuntimeHealth(playback, p115account.RuntimeHealthProviderProtocol)
 			return service.failTask(ctx, task.ID, "repeated_challenge", "rapid upload repeated challenge", ErrProviderProtocol)
 		}
 	}
@@ -943,7 +941,6 @@ func (service *Service) resolveUnderLock(
 	case p115integration.RapidUploadOrdinaryUploadRequired:
 		return service.failTask(ctx, task.ID, "ordinary_upload_required", "ordinary upload is disabled", ErrRapidUploadUnavailable)
 	default:
-		service.reportRuntimeHealth(playback, p115account.RuntimeHealthProviderProtocol)
 		return service.failTask(ctx, task.ID, "provider_rejected", "rapid upload rejected", ErrRapidUploadUnavailable)
 	}
 	if err := service.markStatus(ctx, task.ID, models.PlaybackTransferTaskStatusVerifying); err != nil {
@@ -956,7 +953,6 @@ func (service *Service) resolveUnderLock(
 		return service.failTask(ctx, task.ID, "target_verify_failed", "target verification failed", service.reportProviderFailure(ctx, playback, failureOperationVerifyPlaybackTarget, err))
 	}
 	if !validTargetFile(target, query) {
-		service.reportRuntimeHealth(playback, p115account.RuntimeHealthProviderProtocol)
 		return service.failTask(ctx, task.ID, "target_invalid", "target verification invalid", ErrTargetUnavailable)
 	}
 	if quota != nil {
@@ -1059,14 +1055,12 @@ func (service *Service) searchTarget(ctx context.Context, account p115account.Ac
 		return nil, false, service.reportProviderFailure(ctx, account, failureOperationSearchPlaybackTarget, err)
 	}
 	if len(files) > 1 {
-		service.reportRuntimeHealth(account, p115account.RuntimeHealthProviderProtocol)
 		return nil, false, ErrProviderProtocol
 	}
 	if len(files) == 0 {
 		return nil, false, nil
 	}
 	if !validTargetFile(&files[0], query) {
-		service.reportRuntimeHealth(account, p115account.RuntimeHealthProviderProtocol)
 		return nil, false, ErrProviderProtocol
 	}
 	return &files[0], true, nil
@@ -1090,8 +1084,7 @@ func (service *Service) fetchDownloadCandidate(
 		return RedirectCandidate{}, service.reportProviderFailure(ctx, account, failureOperationGetDownloadURL, err)
 	}
 	if download.URL == "" || !download.ExpiresAt.After(service.now().UTC()) || download.ConcurrentOpenLimit < 0 {
-		service.reportRuntimeHealth(account, p115account.RuntimeHealthProviderProtocol)
-		return RedirectCandidate{}, ErrProviderProtocol
+		return RedirectCandidate{}, withFailureContext(ErrFileUnavailable, FailureContext{ProviderOperation: failureOperationGetDownloadURL})
 	}
 	if download.HeaderMode != p115integration.DownloadHeadersNone &&
 		download.HeaderMode != p115integration.DownloadHeadersSameUserAgent {
@@ -1167,14 +1160,14 @@ func (service *Service) reportRuntimeHealthWithContext(
 	}
 }
 
-// runtimeHealthOutcome excludes cancellation, local data-plane queue overflow,
-// and source-path rejection or protocol errors from account-wide changes.
-// Source credential and real upstream 429 still retain expiry/cooldown.
-// Bare HTTP 403 is treated as unavailable; the reserved risk-control
-// sentinel still maps to cooldown when a verified structured code produces it.
+// runtimeHealthOutcome excludes file/request failures from account-wide changes.
+// HTTP 429 retains rate-limit cooldown; bare HTTP 403 retains unavailable
+// cooldown. Unverified business codes do not imply account risk control.
 func runtimeHealthOutcome(operation string, err error) (p115account.RuntimeHealthOutcome, bool) {
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "", false
+	case errors.Is(err, p115integration.ErrFileUnavailable):
 		return "", false
 	case errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, ErrSourceReadTimeout),
 		errors.Is(err, p115integration.ErrSourceRangeTimeout),
@@ -1351,6 +1344,8 @@ func normalizeSHA1(value string) (string, error) {
 	return value, nil
 }
 
+// mapProviderFailure exposes a stable fallback category while preserving the
+// failed operation; file failures never become account protocol failures.
 func mapProviderFailure(operation string, err error) error {
 	if err == nil {
 		return nil
@@ -1359,6 +1354,8 @@ func mapProviderFailure(operation string, err error) error {
 		return err
 	}
 	switch {
+	case errors.Is(err, p115integration.ErrFileUnavailable), errors.Is(err, p115integration.ErrDownloadURLExpired):
+		return withFailureContext(ErrFileUnavailable, FailureContext{ProviderOperation: operation})
 	case errors.Is(err, ErrSourceReadTimeout), errors.Is(err, p115integration.ErrSourceDirectoryTimeout), errors.Is(err, p115integration.ErrSourceRangeTimeout):
 		return withFailureContext(ErrSourceReadTimeout, FailureContext{ProviderOperation: operation})
 	case errors.Is(err, p115integration.ErrCredentialRejected):
@@ -1377,8 +1374,11 @@ func mapProviderFailure(operation string, err error) error {
 	}
 }
 
+// providerFailureCode stores only fixed failure labels in transfer task history.
 func providerFailureCode(err error) string {
 	switch {
+	case errors.Is(err, p115integration.ErrFileUnavailable):
+		return "file_unavailable"
 	case errors.Is(err, p115integration.ErrCredentialRejected):
 		return "credential_rejected"
 	case errors.Is(err, p115integration.ErrProviderUnavailable):

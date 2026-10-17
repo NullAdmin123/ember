@@ -612,14 +612,15 @@ func (a *CookieHTTPAdapter) GetDownloadURL(ctx context.Context, credential Crede
 		if ctx.Err() != nil {
 			return DownloadURLResult{}, ctx.Err()
 		}
-		return DownloadURLResult{}, protocolError("download response read failed")
+		return DownloadURLResult{}, &operationFailure{cause: ErrProviderUnavailable, stage: observation.stage, reason: "response_read_failed", status: response.StatusCode}
 	}
 	if len(body) > maxCookieResponseBody {
 		return DownloadURLResult{}, protocolError("download response too large")
 	}
 	var outer struct {
-		State *bool   `json:"state"`
-		Data  *string `json:"data"`
+		State *bool           `json:"state"`
+		Data  json.RawMessage `json:"data"`
+		Errno json.RawMessage `json:"errno"`
 	}
 	if err := json.Unmarshal(body, &outer); err != nil {
 		return DownloadURLResult{}, protocolError("download response JSON invalid")
@@ -628,12 +629,13 @@ func (a *CookieHTTPAdapter) GetDownloadURL(ctx context.Context, credential Crede
 		return DownloadURLResult{}, protocolError("download response state missing")
 	}
 	if !*outer.State {
-		return DownloadURLResult{}, ErrProviderRejected
+		return DownloadURLResult{}, downloadRejection(outer.Errno)
 	}
-	if outer.Data == nil || strings.TrimSpace(*outer.Data) == "" {
+	var encryptedData *string
+	if json.Unmarshal(outer.Data, &encryptedData) != nil || encryptedData == nil || strings.TrimSpace(*encryptedData) == "" {
 		return DownloadURLResult{}, protocolError("download response data missing")
 	}
-	plaintext, err := a.downloadDecrypt(*outer.Data)
+	plaintext, err := a.downloadDecrypt(*encryptedData)
 	if err != nil {
 		return DownloadURLResult{}, protocolError("download response decrypt failed")
 	}
@@ -852,7 +854,10 @@ func (a *CookieHTTPAdapter) getJSON(
 
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxCookieResponseBody+1))
 	if err != nil {
-		return protocolError("response read failed")
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &operationFailure{cause: ErrProviderUnavailable, stage: observation.stage, reason: "response_read_failed", status: response.StatusCode}
 	}
 	if len(body) > maxCookieResponseBody {
 		return protocolError("response too large")
@@ -1466,13 +1471,30 @@ func parseRapidUploadRange(value string, fileSize int64) (ByteRange, error) {
 	return ByteRange{Start: start, End: end}, nil
 }
 
-// decodeChromeDownloadURL accepts exactly one decrypted chrome downurl entry bound to the requested pickcode.
+// downloadRejection classifies only the documented downurl errno allowlist.
+// Unknown or malformed codes keep the existing rejection semantics; raw text
+// never supplies credential or account-health evidence.
+func downloadRejection(errno json.RawMessage) error {
+	var code jsonProviderCode
+	if len(errno) == 0 || json.Unmarshal(errno, &code) != nil {
+		return ErrProviderRejected
+	}
+	switch code.value {
+	case "99", "990001":
+		return ErrCredentialRejected
+	case "70005", "231011", "50003", "50015":
+		return ErrFileUnavailable
+	default:
+		return ErrProviderRejected
+	}
+}
+
+// decodeChromeDownloadURL requires one pickcode-bound entry before treating
+// false/null/empty URLs as file failures instead of account protocol failures.
 func decodeChromeDownloadURL(plaintext []byte, expectedPickCode string) (string, error) {
 	var entries map[string]struct {
-		PickCode *string `json:"pick_code"`
-		URL      *struct {
-			Value *string `json:"url"`
-		} `json:"url"`
+		PickCode *string         `json:"pick_code"`
+		URL      json.RawMessage `json:"url"`
 	}
 	if err := json.Unmarshal(plaintext, &entries); err != nil {
 		return "", protocolError("download data JSON invalid")
@@ -1484,10 +1506,20 @@ func decodeChromeDownloadURL(plaintext []byte, expectedPickCode string) (string,
 		if entry.PickCode == nil || *entry.PickCode != expectedPickCode {
 			return "", protocolError("download pickcode mismatch")
 		}
-		if entry.URL == nil || entry.URL.Value == nil || strings.TrimSpace(*entry.URL.Value) == "" {
-			return "", ErrProviderRejected
+		raw := bytes.TrimSpace(entry.URL)
+		if len(raw) == 0 || bytes.Equal(raw, []byte("false")) || bytes.Equal(raw, []byte("null")) {
+			return "", ErrFileUnavailable
 		}
-		return *entry.URL.Value, nil
+		var download struct {
+			Value *string `json:"url"`
+		}
+		if err := json.Unmarshal(raw, &download); err != nil {
+			return "", protocolError("download URL object invalid")
+		}
+		if download.Value == nil || strings.TrimSpace(*download.Value) == "" {
+			return "", ErrFileUnavailable
+		}
+		return *download.Value, nil
 	}
 	return "", protocolError("download data missing")
 }
@@ -1543,8 +1575,11 @@ func parseDownloadURL(rawURL string, now time.Time, hostAllowed func(string) boo
 		return DownloadURLResult{}, err
 	}
 	concurrentOpenLimit, err := strconv.ParseInt(concurrencyValue, 10, 64)
-	if err != nil || concurrentOpenLimit < 0 {
+	if err != nil {
 		return DownloadURLResult{}, protocolError("download URL concurrency invalid")
+	}
+	if concurrentOpenLimit < 0 {
+		return DownloadURLResult{}, ErrFileUnavailable
 	}
 	flag, err := singleDownloadQueryValue(query, "f")
 	if err != nil {

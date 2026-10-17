@@ -346,6 +346,8 @@ func providerContractErrorCode(err error) string {
 		return "deadline_exceeded"
 	case errors.Is(err, ErrCredentialRejected):
 		return "credential_rejected"
+	case errors.Is(err, ErrFileUnavailable):
+		return "file_unavailable"
 	case errors.Is(err, ErrDownloadURLExpired):
 		return "download_expired"
 	case errors.Is(err, ErrDownloadURLIncompatible):

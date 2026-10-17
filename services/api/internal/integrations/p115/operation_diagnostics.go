@@ -158,6 +158,8 @@ func (o *operationObservation) finish(err error) error {
 			reason = "download_url_expired"
 		case errors.Is(err, ErrDownloadURLIncompatible):
 			reason = "download_headers_incompatible"
+		case errors.Is(err, ErrFileUnavailable):
+			reason = "file_unavailable"
 		case errors.As(err, &protocol):
 			reason = strings.NewReplacer(" ", "_", "-", "_").Replace(protocol.reason)
 		case errors.Is(err, ErrProviderRejected):

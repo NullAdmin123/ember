@@ -75,6 +75,8 @@ func (err *DownloadURLPolicyError) Unwrap() error {
 }
 
 var (
+	// ErrFileUnavailable describes one unusable file, never account health.
+	ErrFileUnavailable         = errors.New("p115 file unavailable")
 	ErrCredentialRejected      = errors.New("p115 credential rejected")
 	ErrDownloadURLExpired      = errors.New("p115 download URL expired")
 	ErrDownloadURLIncompatible = errors.New("p115 download URL header mode incompatible")

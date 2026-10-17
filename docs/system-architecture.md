@@ -808,7 +808,7 @@ Telegram 账号绑定与 Bot 自助能力服务。
 - `integrations/p115.CookieHTTPAdapter.HashFileRange`：使用源账号配置 UA 获取签名 URL，按 HeaderMode 在 Provider 内发起最大 1 MiB 的 Range GET，只接受精确 `206/Content-Range/Content-Length` 并只返回大写 SHA1 与读取字节数。`download_url` 与 `source_range` 的 HTTP trace 分开，后者只描述 CDN 请求；Debug `source_range_completed` 用 `sourceDownloadMs/rangeReadMs/durationMs` 描述两阶段与整次 Hash 读取，仍不记录 URL、Cookie 或源字节
 - `integrations/p115.CookieHTTPAdapter.DeleteFile`：只发送单个规范化 file ID，并按 Cookie Provider UID 使用进程内共享锁串行删除；真正发 HTTP 前走同一账号数据面 FIFO 限流。不同 UID 可并行，等待支持 context 取消
 - `DeleteFile` 当前只有协议适配与 fake 测试，没有生产业务调用方；第一阶段 playback 专用目录作为持久缓存，Stopped、会话 TTL 和受控写入检查都不自动删除，容量回收推迟到第二阶段
-- Cookie HTTP 公共边界：10 秒超时、禁止跟随重定向、响应体限额、网络/HTTP/业务/协议错误分层；错误不包含 Cookie、URL、响应正文或上游原始文本
+- Cookie HTTP 公共边界：10 秒超时、禁止跟随重定向、响应体限额、网络/HTTP/业务/协议错误分层；downurl 和通用 GET 的响应体读取中断在调用方 context 有效时归入临时不可用（1 分钟冷却），已取消/到期则保留 context 错误；错误不包含 Cookie、URL、响应正文或上游原始文本
 - DirectPlay 每次入口返回仅用于日志的 Timing 快照，成功/失败均附在 Gateway 单条最终决策日志：directPlayMs、prepare/sourceResolve/targetSearch/lockWait/preID/rapidUpload/challenge/targetVerify/transferCommit/downloadURL 的 Ms 与 Calls，以及未分类 otherMs；重复调用累计，未执行阶段省略。使用单调时钟，不改业务时区或控制流。源目录共享任务 Debug 另含 parentResolveMs/listMs/listPages；统计解释见端到端流程第 8.3 节，Gateway durationMs 不等于首帧耗时
 - `integrations/p115/p115cipher`：基于固定提交黑盒输出独立实现上传 `k_ec`/AES-CBC/LZ4、完整签名表单和下载 RSA request/response 变换；上传响应兼容完整 AES blocks 后的 1 至 15 字节短尾部，以及 LZ4 剩余 1–2 字节/零长度头终止语义，没有完整 AES block 或正数截断 LZ4 block 时失败关闭；固定向量不含真实账号信息
 - `integrations/p115.Provider`：账号验证、上传信息、源路径解析、SHA1 搜索、秒传初始化、目标复核、下载地址、受限 Range Hash 和串行删除的 Cookie 实现均已有 fake HTTP 合同；2026-08-22 本地真实检查已通过 source 只读链路，以及 playback `range_challenge → reused → 目标复核 → downurl → 128 KiB Range` 保留式写入链路
@@ -830,6 +830,7 @@ Telegram 账号绑定与 Bot 自助能力服务。
 - 新增转存的 Redis 提交在 Info 记录 `transfer_quota_committed`，关联 `userId/taskId/playbackAccountId`、幂等新增结果及 pending/小时/每日用量；预算耗尽在 Warn 记录 `transfer_quota_commit_failed usageAvailable=false`，不伪造零。控制台用户用量成功读取在 Debug 记录 `p115_user_usage_read`，包含同一用户的播放/转存快照与 `CRON_TIMEZONE` 日窗口，供对照 Gateway 写入端和 API 展示端；详见 [部署排障](./runbooks/deployment-troubleshooting.md)。不输出 Redis 连接串、完整 Key、attempt ID 或凭证
 - `status=1`、重复/越界 challenge、Provider 故障和目标复核失败均写入固定脱敏失败码；成功保存目标 fileId/pickCode、完成时间和 `lastAccessedAt`
 - 已取得的 advisory lock 固定在一条 PostgreSQL 物理连接上；释放使用独立超时 context。取锁响应丢失或解锁失败时丢弃连接，避免状态不明的 session 锁进入连接池
+- downurl 的 `url=false/null/空` 与已知文件不存在 errno 使用 `ErrFileUnavailable`，映射为 Gateway `file_unavailable` fallback；空/失效直链、负数并发候选、秒传业务拒绝、无效/重复 challenge 和目标文件不符只结束当前请求/任务，不回写账号 `provider_protocol`。`99/990001` 才按本次明确 errno 表判断凭证失效，未知码保持既有拒绝分类；公开逆向证据和“未经真实账号证实”边界见 [Cookie 合同 §5.5.1](./reference/p115-cookie-playback-contract.md#551-downurl-文件失败与-errno未经真实账号证实)。
 - 任务成功并释放锁后才签发本次 playback 下载 URL；需要客户端 Cookie 的 HeaderMode 失败关闭，不向播放器泄露 playback Cookie
 - 可用直链签发并完成必要任务持久化后，source/playback 都回写运行期成功；Provider 凭证失效、临时不可用、限流、风控和协议错误只按实际调用账号回写固定状态。回写使用独立 2 秒上限且失败不改写 302/fallback 结果，请求取消、大目录超时和文件级错误不污染账号健康
 - 源路径解析的业务拒绝、协议异常及无效源文件身份统一限制在当前请求：不回写源账号 `error`，不进入查重/秒传，释放本次新播放 reservation，并保留 `providerOperation=resolve_source_path` 供 Gateway 的单条 fallback 日志排障。源解析明确返回凭证失效或临时不可用时仍执行原账号状态/冷却处理；其他 Provider 操作的协议故障仍按原合同回写账号 `error`

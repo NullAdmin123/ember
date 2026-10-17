@@ -151,6 +151,7 @@ func TestProviderContractErrorCodeMapsNewSentinels(t *testing.T) {
 		err  error
 		want string
 	}{
+		{ErrFileUnavailable, "file_unavailable"},
 		{ErrProviderRateLimited, "provider_rate_limited"},
 		{ErrProviderRiskControl, "provider_risk_control"},
 		{ErrDataPlaneQueueLimited, "data_plane_queue_limited"},

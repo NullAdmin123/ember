@@ -526,6 +526,8 @@ func directPlayReasonCode(err error) string {
 		return "rapid_upload_unavailable"
 	case errors.Is(err, directplay.ErrTargetUnavailable):
 		return "target_unavailable"
+	case errors.Is(err, directplay.ErrFileUnavailable):
+		return "file_unavailable"
 	case errors.Is(err, directplay.ErrDownloadIncompatible):
 		return "download_incompatible"
 	case errors.Is(err, directplay.ErrStoreUnavailable):
