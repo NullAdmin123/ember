@@ -289,8 +289,10 @@ func (s *gormAccountStore) ReplacePersonalCredential(ctx context.Context, ownerU
 }
 
 // RevokePersonal erases the current user's credential and runtime fields while
-// preserving the account row for transfer provenance. Missing accounts succeed.
-func (s *gormAccountStore) RevokePersonal(ctx context.Context, ownerUserID string) error {
+// preserving the account row for transfer provenance. The returned UID belongs
+// to the row locked by this transaction; failed commits and misses return none.
+func (s *gormAccountStore) RevokePersonal(ctx context.Context, ownerUserID string) (string, error) {
+	var providerUserID string
 	err := s.database(ctx).Transaction(func(tx *gorm.DB) error {
 		var account models.P115Account
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -301,7 +303,7 @@ func (s *gormAccountStore) RevokePersonal(ctx context.Context, ownerUserID strin
 			}
 			return err
 		}
-		return tx.Model(&models.P115Account{}).Where("id = ?", account.ID).Updates(map[string]interface{}{
+		if err := tx.Model(&models.P115Account{}).Where("id = ?", account.ID).Updates(map[string]interface{}{
 			"owner_user_id":          nil,
 			"provider_user_id":       nil,
 			"cookie_ciphertext":      nil,
@@ -321,9 +323,18 @@ func (s *gormAccountStore) RevokePersonal(ctx context.Context, ownerUserID strin
 			"last_error_message":     nil,
 			"updated_at":             gorm.Expr("CURRENT_TIMESTAMP"),
 			"config_version":         gorm.Expr("config_version + 1"),
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		if account.ProviderUserID != nil {
+			providerUserID = *account.ProviderUserID
+		}
+		return nil
 	})
-	return safeP115AccountStoreError("revoke_personal", err)
+	if err != nil {
+		return "", safeP115AccountStoreError("revoke_personal", err)
+	}
+	return providerUserID, nil
 }
 
 func (s *gormAccountStore) CompleteValidationSuccess(

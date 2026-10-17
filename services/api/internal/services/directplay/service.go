@@ -181,7 +181,8 @@ type transferQuotaContext struct {
 // Service serializes retained playback transfers and returns a validated 115
 // redirect candidate without exposing an HTTP endpoint.
 type Service struct {
-	sourceReadBudget       time.Duration // Test seam; production bounds each read-only source phase.
+	sourceReadBudget       time.Duration // Test seam for the source-directory budget only.
+	sourceReadTimeout      func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	sessionRequests        requestGate
 	downloadCache          *downloadURLCache
 	mediaCache             *mediaResolutionCache
@@ -684,7 +685,7 @@ func (service *Service) resolveWithAccounts(
 ) (candidate RedirectCandidate, resolveErr error) {
 	finishPreparation(ctx)
 	finishSource := measureStage(ctx, "sourceResolve")
-	readCtx, cancelRead := context.WithTimeout(ctx, service.sourcePathResolveLimit())
+	readCtx, cancelRead := service.sourcePathContext(ctx)
 	sourceFile, err := service.provider.ResolveFileByPath(readCtx, source.Credential, request.SourceFile)
 	err = sourceReadResult(ctx, readCtx, err)
 	cancelRead()
@@ -870,12 +871,10 @@ func (service *Service) resolveUnderLock(
 	}
 	preIDRange := boundedRange(sourceFile.Size)
 	finishPreID := measureStage(ctx, "preID")
-	readCtx, cancelRead := context.WithTimeout(ctx, service.sourceRangeReadLimit())
-	preIDHash, err := service.provider.HashFileRange(readCtx, source.Credential, p115integration.FileRangeRequest{
+	preIDHash, err := service.provider.HashFileRange(ctx, source.Credential, p115integration.FileRangeRequest{
 		File: sourceFile, Range: preIDRange,
 	})
-	err = sourceReadResult(ctx, readCtx, err)
-	cancelRead()
+	err = sourceReadResult(ctx, ctx, err)
 	finishPreID()
 	if err != nil {
 		return service.failTask(ctx, task.ID, "preid_failed", "source preID range failed", service.reportProviderFailure(ctx, source, failureOperationHashSourcePreID, err))
@@ -903,12 +902,10 @@ func (service *Service) resolveUnderLock(
 			return p115integration.File{}, "", false, err
 		}
 		finishChallenge := measureStage(ctx, "challenge")
-		readCtx, cancelRead := context.WithTimeout(ctx, service.sourceRangeReadLimit())
-		challengeHash, hashErr := service.provider.HashFileRange(readCtx, source.Credential, p115integration.FileRangeRequest{
+		challengeHash, hashErr := service.provider.HashFileRange(ctx, source.Credential, p115integration.FileRangeRequest{
 			File: sourceFile, Range: result.Challenge.Range,
 		})
-		hashErr = sourceReadResult(ctx, readCtx, hashErr)
-		cancelRead()
+		hashErr = sourceReadResult(ctx, ctx, hashErr)
 		finishChallenge()
 		if hashErr != nil {
 			return service.failTask(ctx, task.ID, "challenge_failed", "rapid upload challenge range failed", service.reportProviderFailure(ctx, source, failureOperationHashSourceChallenge, hashErr))

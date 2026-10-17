@@ -41,6 +41,7 @@ func (c fakeCredentialCipher) Decrypt(ciphertext string) (string, error) {
 type fakeAccountStore struct {
 	accounts                            map[string]*models.P115Account
 	createErr                           error
+	revokeErr                           error
 	getErr                              error
 	replaceErr                          error
 	validationErr                       error
@@ -281,11 +282,16 @@ func (s *fakeAccountStore) ReplacePersonalCredential(_ context.Context, ownerUse
 	return &copy, nil
 }
 
-func (s *fakeAccountStore) RevokePersonal(_ context.Context, ownerUserID string) error {
+// RevokePersonal mirrors atomic tombstone/UID return without a real database.
+func (s *fakeAccountStore) RevokePersonal(_ context.Context, ownerUserID string) (string, error) {
+	if s.revokeErr != nil {
+		return "", s.revokeErr
+	}
 	for _, account := range s.accounts {
 		if account.OwnerUserID == nil || *account.OwnerUserID != ownerUserID || account.Status == models.P115AccountStatusRevoked {
 			continue
 		}
+		providerUserID := stringValue(account.ProviderUserID)
 		account.OwnerUserID = nil
 		account.ProviderUserID = nil
 		account.CookieCiphertext = nil
@@ -303,9 +309,9 @@ func (s *fakeAccountStore) RevokePersonal(_ context.Context, ownerUserID string)
 		account.CooldownUntil = nil
 		account.LastErrorCode = nil
 		account.LastErrorMessage = nil
-		return nil
+		return providerUserID, nil
 	}
-	return nil
+	return "", nil
 }
 
 func (s *fakeAccountStore) CompleteValidationSuccess(_ context.Context, id, expectedCiphertext, providerUserID string, at time.Time) (*models.P115Account, error) {

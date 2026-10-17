@@ -620,17 +620,28 @@ func playbackProofMatchesPrincipal(proof PlaybackProof, principal embytoken.Prin
 
 // handleUpstreamError returns a fixed transport status and logs only the Go
 // error type. Upstream URLs, credentials and response bodies are never logged.
+// Canceled transport requests use 499 and never produce outage-level logs.
 func (gateway *Gateway) handleUpstreamError(writer http.ResponseWriter, request *http.Request, err error) {
+	canceled := errors.Is(err, context.Canceled)
+	status, code := http.StatusBadGateway, "upstream_unavailable"
+	if canceled {
+		status, code = statusClientClosedRequest, "request_canceled"
+	}
 	if routeContext, ok := routeContextFromRequest(request); ok && routeContext.kind == routeVideo && routeContext.videoDecision != nil {
 		decision := *routeContext.videoDecision
-		decision.StatusCode = http.StatusBadGateway
-		decision.ProxyErrorCode = "upstream_unavailable"
+		decision.StatusCode = status
+		decision.ProxyErrorCode = code
 		gateway.logVideoDecision(decision)
-		writer.WriteHeader(http.StatusBadGateway)
+		writer.WriteHeader(status)
+		return
+	}
+	if canceled {
+		gateway.debugf("[PlaybackGateway] code=upstream_request_canceled")
+		writer.WriteHeader(status)
 		return
 	}
 	gateway.logger.Printf("[PlaybackGateway] code=upstream_unavailable errorType=%T", err)
-	writer.WriteHeader(http.StatusBadGateway)
+	writer.WriteHeader(status)
 }
 
 // Exact method/depth matching with case-insensitive semantic segments supports

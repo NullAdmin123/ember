@@ -147,6 +147,7 @@ func (o *operationObservation) finish(err error) error {
 	if err != nil {
 		var protocol *protocolFailure
 		var policy *DownloadURLPolicyError
+		var upload *RapidUploadProtocolError
 		switch {
 		case errors.As(err, &policy):
 			reason = "download_policy_rejected"
@@ -160,6 +161,14 @@ func (o *operationObservation) finish(err error) error {
 			reason = "download_headers_incompatible"
 		case errors.Is(err, ErrFileUnavailable):
 			reason = "file_unavailable"
+		case errors.As(err, &upload):
+			switch upload.Phase {
+			case RapidUploadPhasePayloadBuild, RapidUploadPhaseRequestBuild, RapidUploadPhaseResponseRead,
+				RapidUploadPhaseResponseTooLarge, RapidUploadPhaseResponseDecrypt, RapidUploadPhaseResponseMap:
+				reason = "upload_" + string(upload.Phase)
+			default:
+				reason = "upload_protocol_error"
+			}
 		case errors.As(err, &protocol):
 			reason = strings.NewReplacer(" ", "_", "-", "_").Replace(protocol.reason)
 		case errors.Is(err, ErrProviderRejected):

@@ -8,17 +8,17 @@ import (
 
 const sourceRangePhaseTimeout = 5 * time.Second
 
-// SourceRangeReadTimeout bounds signed-URL preparation plus one CDN range
-// read; each phase retains its own 5s limit and honors any earlier caller deadline.
+// SourceRangeReadTimeout is the nominal sum of the independent 5s URL/read
+// windows, not an additional outer timer that could erase failed-stage details.
 const SourceRangeReadTimeout = 2 * sourceRangePhaseTimeout
 
-// sourceRangePhaseLimit permits short mock deadlines without exposing a new
-// deployment setting or changing the budgets of retained provider writes.
-func (a *CookieHTTPAdapter) sourceRangePhaseLimit() time.Duration {
-	if a.sourceRangePhaseBudget > 0 {
-		return a.sourceRangePhaseBudget
+// sourcePhaseContext keeps production deadlines on the standard context clock
+// while allowing read-only budget tests to advance time without sleeping.
+func (a *CookieHTTPAdapter) sourcePhaseContext(ctx context.Context, limit time.Duration) (context.Context, context.CancelFunc) {
+	if a.sourceReadTimeout != nil {
+		return a.sourceReadTimeout(ctx, limit)
 	}
-	return sourceRangePhaseTimeout
+	return context.WithTimeout(ctx, limit)
 }
 
 // sourceRangeStageResult distinguishes a local read deadline from caller

@@ -57,7 +57,7 @@ type accountStore interface {
 	UpdatePersonalDirectory(ctx context.Context, ownerUserID, expectedCiphertext string, expectedConfigVersion int64, targetParentPath, targetParentID string) (*models.P115Account, error)
 	UpdatePersonalConcurrency(ctx context.Context, ownerUserID string, maxConcurrentStreams int) (*models.P115Account, PersonalPlanPolicy, error)
 	SetPersonalEnabled(ctx context.Context, ownerUserID string, enabled bool) (*models.P115Account, PersonalPlanPolicy, error)
-	RevokePersonal(ctx context.Context, ownerUserID string) error
+	RevokePersonal(ctx context.Context, ownerUserID string) (string, error)
 }
 
 type credentialReplacement struct {
@@ -151,6 +151,7 @@ type ReplaceCookieInput struct {
 
 // Service owns 115 account validation rules and encrypted credential persistence.
 type Service struct {
+	forgetAccount     func(string)
 	store             accountStore
 	cipher            credentialCipher
 	validator         p115integration.CredentialValidator
@@ -196,7 +197,8 @@ func NewServiceWithLeaseStore(
 		return nil, ErrPersonalPlanPolicyUnavailable
 	}
 	service := &Service{
-		store: &gormAccountStore{db: database}, cipher: box, validator: validator,
+		forgetAccount: p115integration.ForgetDataPlaneAccount,
+		store:         &gormAccountStore{db: database}, cipher: box, validator: validator,
 		leases: leases, keyDeriver: keyDeriver, businessTimezone: businessTimezone, now: time.Now,
 	}
 	if resolver, ok := validator.(directoryResolver); ok {
@@ -206,7 +208,7 @@ func NewServiceWithLeaseStore(
 }
 
 func newServiceWithDependencies(store accountStore, cipher credentialCipher) *Service {
-	return &Service{store: store, cipher: cipher, now: time.Now}
+	return &Service{store: store, cipher: cipher, now: time.Now, forgetAccount: p115integration.ForgetDataPlaneAccount}
 }
 
 // List returns all administrator-managed accounts as safe summaries.

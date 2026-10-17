@@ -450,9 +450,9 @@ SHA1 + size + isDirectory=false
 ### 7.1 源读取故障诊断与预算（2026-10-12）
 
 - 生产日志先出现父目录解析约 10 秒失败，后又出现目录解析成功、起播许可继承通过，但 `hash_source_preid` 在约 1.21 秒失败。现有样本无法确定后者是直链响应解析、解密还是 Range 校验失败，不把任一假设当作协议事实。
-- Debug `provider_operation_completed` 区分 `source_parent/source_list/download_url/source_range/cookie_get`，记录固定 reason、数值 HTTP 状态、networkPhase、DNS/连接/TLS/首字节与总耗时；复用连接的前几项可以为零。`download_url` 描述源取链；`source_range` 的 trace 只在实际 CDN 请求前创建，其网络与首字节耗时不包含先前的取链请求。Debug `source_range_completed` 汇总 `sourceDownloadMs/rangeReadMs/durationMs/success`；前两项分别是取链与 Range 阶段耗时，整次 Hash 总耗时仍计入 DirectPlay `preIDMs/challengeMs`，不可再次相加。HTTP trace 字段不携带域名、IP、URL、Cookie 或原始响应。
+- Debug `provider_operation_completed` 区分 `source_parent/source_list/download_url/source_range/cookie_get/rapid_upload`，记录固定 reason、数值 HTTP 状态、networkPhase、DNS/连接/TLS/首字节与总耗时；复用连接的前几项可以为零。`download_url` 描述源取链；`source_range` 的 trace 只在实际 CDN 请求前创建，其网络与首字节耗时不包含先前的取链请求。Debug `source_range_completed` 汇总 `sourceDownloadMs/rangeReadMs/durationMs/success`；前两项分别是取链与 Range 阶段耗时，整次 Hash 总耗时仍计入 DirectPlay `preIDMs/challengeMs`，不可再次相加。HTTP trace 字段不携带域名、IP、URL、Cookie 或原始响应。秒传的上传信息 GET 与实际上传 POST 分别观测；`rapid_upload` 保留脱敏阶段、HTTP 状态与取消语义，协议错误仍可携带既有有界检查器证据。
 - 失败元数据沿 Provider → DirectPlay → Gateway 传递，最终决策增加 `providerStage/providerReason/providerHTTPStatus`；嵌套直链失败保留 download_url 阶段，不误报为 CDN Range 失败。无精确细分的外部错误使用固定兜底原因，不输出原始错误。
-- DirectPlay 源路径读取（`ResolveFileByPath`）使用与共享目录 flight 对齐的 30 秒预算。每次 preID/challenge 的源片段最多 10 秒：获取源直链与实际 CDN Range 各有独立 5 秒窗口，后者包含 DNS、TCP/TLS、响应头和完整 body 读取。取链窗口包括本地数据面排队及响应解析；取链失败后不发起 Range。各阶段受调用方更早 deadline 和整次加速 2 分钟总 deadline 约束，不新增部署配置。
+- DirectPlay 源路径读取（`ResolveFileByPath`）使用与共享目录 flight 对齐的 30 秒预算。每次 preID/challenge 的获取源直链与实际 CDN Range 各有独立 5 秒窗口，不再由 Service 或 Adapter 额外套 10 秒总定时器；两阶段串行且名义预算之和仍为 10 秒，后者包含 DNS、TCP/TLS、响应头和完整 body 读取。取链窗口包括本地数据面排队及响应解析；取链失败后不发起 Range。各阶段受调用方更早 deadline 和整次加速 2 分钟总 deadline 约束，不新增部署配置。
 - Adapter 的本地阶段超时使用 `ErrSourceRangeTimeout`，DirectPlay 统一映射为 `source_read_timeout` 并保留可用的失败 HTTP 阶段；客户端取消/自身 deadline 保持原有语义。本地预算耗尽与真实网络错误分开，不污染账号健康。共享目录的 30 秒总预算、单 HTTP 10 秒底层上限仍保留；最后一个等待者退出会取消共享请求。
 - 2026-10-12 在部署 `preview-f18c84e`、Emby `4.9.3.0`、Infuse `8.5.6` 上的受控抓包，观察到旧的 5 秒共享 preID 预算分别在 TLS 和等待响应头阶段耗尽；后一例 TCP 建连约 183 ms、源取链约 2.37 s，不能只归因为 SYN 重传。另一个首次转存样本成功，停止后重播命中缓存。该证据指导预算拆分，不证明本次修复已经部署或首帧延迟已经改善；原始抓包和完整响应不进入仓库。
 - 不放宽 Range 的状态、范围、编码、长度校验，不自动重试 retained 写入，不把未经验证的外部响应当成功。真实 115 故障根因仍需要部署后细分日志确认；本次验证依赖 mock 和 PostgreSQL 隔离集成。
@@ -546,6 +546,12 @@ playbackAccountId + SHA1 + size
 - Cookie 失效、账号风控、下载地址不兼容、普通上传要求、本地数据面排队拒绝和 Provider 限流必须使用不同内部错误码。
 - 负缓存只能短期存在；一次搜索失败不能长期证明文件不存在。
 - 已签发的 CDN 链接无法由 Ember 保证立即失效，封禁和账号失效只能阻止新直链。
+
+### 10.1 数据面限流桶生命周期
+
+生产 Cookie Adapter 共用进程内 Provider UID 限流器，环境配置在首次构造时读取；FIFO、令牌发放、`MaxWait` 和本地排队拒绝语义保持。无等待者且令牌自然回满时，回调回收 UID 桶，不以提前删除桶来刷新突发额度。计时回调同时校验桶身份和代次，旧回调不能触及重绑后的新桶。
+
+个人账号解绑及删除用户都走 revoked tombstone：事务返回被锁定记录的旧 Provider UID，只有提交成功后才通知本进程限流器。事务失败或账号已不存在不清理；未回满或仍有等待者时保留原余额与队列，随后自然回收。API 与 Gateway 仍是独立进程，Gateway 依靠相同空闲回收处理残留，不新增跨进程通知、共享限流存储或 Redis 租约删除。
 
 ## 11. 自动化测试合同
 

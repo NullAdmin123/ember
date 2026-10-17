@@ -159,13 +159,14 @@ func (s *Service) ValidatePersonalAccount(ctx context.Context, ownerUserID strin
 }
 
 // RevokePersonalAccount atomically turns the current personal account into an
-// irreversible credential-free tombstone. Redis leases are intentionally untouched.
+// irreversible credential-free tombstone, then reclaims safe local limiter
+// state for its committed UID. Redis leases are intentionally untouched.
 func (s *Service) RevokePersonalAccount(ctx context.Context, ownerUserID string) error {
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	if ownerUserID == "" {
 		return ErrOwnerUserIDRequired
 	}
-	return s.store.RevokePersonal(ctx, ownerUserID)
+	return revokePersonalAndForget(ctx, s.store, ownerUserID, s.forgetAccount)
 }
 
 func personalAccountSummary(account *models.P115Account) *PersonalAccountSummary {

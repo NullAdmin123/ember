@@ -602,6 +602,9 @@ func (gateway *Gateway) logVideoDecision(decision videoDecision) {
 // fallback status and severity still describe the actual upstream response.
 func videoDecisionHeadline(decision videoDecision) []string {
 	fields := []string{"[PlaybackGateway]"}
+	if decision.ProxyErrorCode == "request_canceled" && decision.StatusCode == statusClientClosedRequest {
+		return append(fields, "level=info", "code=playback_canceled", "message="+strconv.Quote("播放请求已取消"), "result=canceled", "statusCode=499")
+	}
 	switch decision.Decision {
 	case "redirect":
 		targetState := "created"

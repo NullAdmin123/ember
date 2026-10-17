@@ -48,6 +48,13 @@ type accountRateLimiter struct {
 	observeGrant func(time.Time)
 }
 
+// Production adapters live for the process lifetime and share one UID budget.
+// This also lets control-plane revocation reach the same local bucket map.
+var productionDataPlaneLimiter struct {
+	sync.Mutex
+	limiter *accountRateLimiter
+}
+
 type tokenBucket struct {
 	tokens    float64
 	last      time.Time
@@ -132,7 +139,38 @@ func attachDataPlaneLimiter(adapter *CookieHTTPAdapter) {
 	if adapter == nil {
 		return
 	}
-	adapter.limiter = newAccountRateLimiter(ParseDataPlaneLimitConfig())
+	productionDataPlaneLimiter.Lock()
+	defer productionDataPlaneLimiter.Unlock()
+	if productionDataPlaneLimiter.limiter == nil {
+		productionDataPlaneLimiter.limiter = newAccountRateLimiter(ParseDataPlaneLimitConfig())
+	}
+	adapter.limiter = productionDataPlaneLimiter.limiter
+}
+
+// ForgetDataPlaneAccount reclaims a revoked UID's local bucket once safe.
+// Pending callers and depleted tokens retain FIFO/rate semantics until refill;
+// idle refill cleanup also covers revocations performed by another process.
+func ForgetDataPlaneAccount(providerUserID string) {
+	productionDataPlaneLimiter.Lock()
+	limiter := productionDataPlaneLimiter.limiter
+	productionDataPlaneLimiter.Unlock()
+	if limiter != nil && providerUserID != "" {
+		limiter.forgetAccount(providerUserID)
+	}
+}
+
+// forgetAccount removes only a fully refilled, idle bucket. Resetting a live
+// bucket would let rapid unbind/rebind bypass burst limits or orphan waiters.
+func (limiter *accountRateLimiter) forgetAccount(accountKey string) {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	bucket := limiter.buckets[accountKey]
+	if bucket == nil {
+		return
+	}
+	limiter.refillLocked(bucket, limiter.currentTime())
+	limiter.grantReadyLocked(bucket)
+	limiter.armTimerLocked(accountKey, bucket)
 }
 
 // newAccountRateLimiter builds an empty per-UID FIFO grant map.
@@ -237,6 +275,7 @@ func (limiter *accountRateLimiter) enqueue(accountKey string) (*dataPlaneWaiter,
 	limiter.grantReadyLocked(bucket)
 	if bucket.tokens >= 1 && bucket.waiters.Len() == 0 {
 		limiter.takeTokenLocked(bucket)
+		limiter.armTimerLocked(accountKey, bucket)
 		return nil, nil
 	}
 	waitSeconds := limiter.delaySecondsLocked(bucket, bucket.waiters.Len())
@@ -402,14 +441,20 @@ func (limiter *accountRateLimiter) disarmTimerLocked(bucket *tokenBucket) {
 
 func (limiter *accountRateLimiter) armTimerLocked(accountKey string, bucket *tokenBucket) {
 	limiter.disarmTimerLocked(bucket)
-	if bucket.waiters.Len() == 0 {
-		return
-	}
+	idle := bucket.waiters.Len() == 0
 	waitSeconds := limiter.delaySecondsLocked(bucket, 0)
-	if waitSeconds <= 0 {
+	if idle {
+		waitSeconds = (float64(limiter.config.Burst) - bucket.tokens) / limiter.config.RPS
+		if waitSeconds <= 0 {
+			delete(limiter.buckets, accountKey)
+			return
+		}
+	}
+	if !idle && waitSeconds <= 0 {
 		limiter.refillLocked(bucket, limiter.currentTime())
 		limiter.grantReadyLocked(bucket)
 		if bucket.waiters.Len() == 0 {
+			limiter.armTimerLocked(accountKey, bucket)
 			return
 		}
 		waitSeconds = limiter.delaySecondsLocked(bucket, 0)
@@ -418,17 +463,22 @@ func (limiter *accountRateLimiter) armTimerLocked(accountKey string, bucket *tok
 		}
 	}
 	delay := durationFromSeconds(waitSeconds)
+	if idle && delay <= 0 {
+		delay = time.Nanosecond
+	}
 	gen := bucket.timerGen
 	bucket.stopTimer = limiter.scheduleAfter(delay, func() {
-		limiter.onTokenTimer(accountKey, gen)
+		limiter.onTokenTimer(accountKey, bucket, gen)
 	})
 }
 
-func (limiter *accountRateLimiter) onTokenTimer(accountKey string, gen uint64) {
+// onTokenTimer binds both bucket identity and timer generation, so callbacks
+// from a removed UID cannot touch a new bucket created after rebinding.
+func (limiter *accountRateLimiter) onTokenTimer(accountKey string, expected *tokenBucket, gen uint64) {
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
 	bucket := limiter.buckets[accountKey]
-	if bucket == nil || bucket.timerGen != gen {
+	if bucket == nil || bucket != expected || bucket.timerGen != gen {
 		return
 	}
 	limiter.refillLocked(bucket, limiter.currentTime())

@@ -66,7 +66,7 @@ type CookieHTTPAdapter struct {
 	sourceResolvePageSize   int
 	sourceResolveMaxEntries int
 	sourceFlights           sourceDirectoryFlights
-	sourceRangePhaseBudget  time.Duration // Test seam for independent read-only phase deadlines.
+	sourceReadTimeout       func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	limiter                 *accountRateLimiter
 }
 
@@ -475,7 +475,7 @@ func (a *CookieHTTPAdapter) findTargetFileOnce(ctx context.Context, credential C
 
 // InitRapidUpload builds the encrypted Cookie upload request and maps the
 // provider's direct status response into Ember-owned state semantics.
-func (a *CookieHTTPAdapter) InitRapidUpload(ctx context.Context, credential Credential, request RapidUploadRequest) (RapidUploadResult, error) {
+func (a *CookieHTTPAdapter) InitRapidUpload(ctx context.Context, credential Credential, request RapidUploadRequest) (uploadResult RapidUploadResult, resultErr error) {
 	normalized, err := normalizeRapidUploadRequest(request)
 	if err != nil {
 		return RapidUploadResult{}, err
@@ -484,6 +484,10 @@ func (a *CookieHTTPAdapter) InitRapidUpload(ctx context.Context, credential Cred
 	if err != nil {
 		return RapidUploadResult{}, err
 	}
+	// Upload-info owns its own trace; only the actual upload request and
+	// response belong to this observation, avoiding nested HTTP timings.
+	ctx, observation := observeOperation(ctx, "rapid_upload")
+	defer func() { resultErr = observation.finish(resultErr) }()
 	timestamp := a.now().UTC().Unix()
 	encrypted, err := p115cipher.BuildUploadRequest(p115cipher.UploadPayload{
 		UserKey:    uploadInfo.UserKey,
@@ -516,9 +520,9 @@ func (a *CookieHTTPAdapter) InitRapidUpload(ctx context.Context, credential Cred
 	if err := a.waitDataPlane(ctx, credential); err != nil {
 		return RapidUploadResult{}, err
 	}
-	response, err := a.client.Do(httpRequest)
+	response, err := observation.do(a.client, httpRequest)
 	if err != nil {
-		return RapidUploadResult{}, fmt.Errorf("%w: %v", ErrProviderUnavailable, upstream.SafeUpstreamError(err, "p115"))
+		return RapidUploadResult{}, err
 	}
 	defer response.Body.Close()
 	if err := mapCookieAPIStatus(response.StatusCode); err != nil {
@@ -526,6 +530,9 @@ func (a *CookieHTTPAdapter) InitRapidUpload(ctx context.Context, credential Cred
 	}
 	ciphertext, err := io.ReadAll(io.LimitReader(response.Body, maxCookieResponseBody+1))
 	if err != nil {
+		if ctx.Err() != nil {
+			return RapidUploadResult{}, ctx.Err()
+		}
 		return RapidUploadResult{}, rapidUploadProtocolError(RapidUploadPhaseResponseRead, response, nil)
 	}
 	if len(ciphertext) > maxCookieResponseBody {
@@ -559,7 +566,15 @@ func (a *CookieHTTPAdapter) InitRapidUpload(ctx context.Context, credential Cred
 // and returns only an HTTPS 115-owned URL with complete t/c/f semantics.
 func (a *CookieHTTPAdapter) GetDownloadURL(ctx context.Context, credential Credential, request DownloadURLRequest) (result DownloadURLResult, resultErr error) {
 	ctx, observation := observeOperation(ctx, "download_url")
-	defer func() { resultErr = observation.finish(resultErr) }()
+	defer func() {
+		if resultErr == nil && ctx.Err() != nil {
+			result, resultErr = DownloadURLResult{}, ctx.Err()
+		}
+		resultErr = observation.finish(resultErr)
+	}()
+	if err := ctx.Err(); err != nil {
+		return DownloadURLResult{}, err
+	}
 	providerUserID, err := validateCookieHTTPCredential(credential)
 	if err != nil {
 		return DownloadURLResult{}, err
@@ -673,10 +688,8 @@ func (a *CookieHTTPAdapter) HashFileRange(
 		logging.Debugf("[P115] code=source_range_completed sourceDownloadMs=%d rangeReadMs=%d durationMs=%d success=%t",
 			downloadDuration.Milliseconds(), rangeDuration.Milliseconds(), time.Since(started).Milliseconds(), resultErr == nil)
 	}()
-	phaseLimit := a.sourceRangePhaseLimit()
-	totalCtx, cancelTotal := context.WithTimeout(ctx, 2*phaseLimit)
-	defer cancelTotal()
-	downloadCtx, cancelDownload := context.WithTimeout(totalCtx, phaseLimit)
+	phaseLimit := sourceRangePhaseTimeout
+	downloadCtx, cancelDownload := a.sourcePhaseContext(ctx, phaseLimit)
 	downloadStarted := time.Now()
 	download, err := a.GetDownloadURL(downloadCtx, credential, DownloadURLRequest{
 		PickCode:  request.File.PickCode,
@@ -688,7 +701,7 @@ func (a *CookieHTTPAdapter) HashFileRange(
 	if err != nil {
 		return FileRangeHash{}, err
 	}
-	rangeCtx, cancelRange := context.WithTimeout(totalCtx, phaseLimit)
+	rangeCtx, cancelRange := a.sourcePhaseContext(ctx, phaseLimit)
 	defer cancelRange()
 	rangeStarted := time.Now()
 	result, resultErr = a.readFileRange(rangeCtx, credential, request, download, rangeUserAgent, expectedBytes)

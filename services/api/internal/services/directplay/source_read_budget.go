@@ -18,13 +18,13 @@ func (s *Service) sourcePathResolveLimit() time.Duration {
 	return p115.SourceDirectoryResolveTimeout
 }
 
-// sourceRangeReadLimit covers two independently bounded 5s HTTP phases without
-// extending the caller's total acceleration deadline. The seam shortens the total.
-func (s *Service) sourceRangeReadLimit() time.Duration {
-	if s.sourceReadBudget > 0 {
-		return s.sourceReadBudget
+// sourcePathContext lets tests advance directory deadlines without wall-clock
+// sleeps. Range reads use the Provider's two independent phase budgets instead.
+func (s *Service) sourcePathContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if s.sourceReadTimeout != nil {
+		return s.sourceReadTimeout(ctx, s.sourcePathResolveLimit())
 	}
-	return p115.SourceRangeReadTimeout
+	return context.WithTimeout(ctx, s.sourcePathResolveLimit())
 }
 
 // sourceReadResult distinguishes Ember's optional acceleration budget from a

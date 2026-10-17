@@ -392,12 +392,13 @@ func TestAccountRateLimiterStaleTimerDoesNotReplaceSuccessor(t *testing.T) {
 	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
 		t.Fatalf("burst token: %v", err)
 	}
+	beforeWait := sched.createdCount() // Initial burst now arms idle refill cleanup.
 
 	ctxA, cancelA := context.WithCancel(context.Background())
 	doneA := make(chan error, 1)
 	go func() { doneA <- limiter.Wait(ctxA, "uid-1") }()
 	waitUntilQueued(t, limiter, "uid-1", 1)
-	if created := sched.createdCount(); created != 2 {
+	if created := sched.createdCount() - beforeWait; created != 2 {
 		t.Fatalf("first arm created %d timers, want token + MaxWait", created)
 	}
 
@@ -415,18 +416,20 @@ func TestAccountRateLimiterStaleTimerDoesNotReplaceSuccessor(t *testing.T) {
 	if err := <-doneA; !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled waiter error = %v", err)
 	}
+	beforeSuccessor := sched.createdCount()
 
 	doneB := make(chan error, 1)
 	go func() { doneB <- limiter.Wait(context.Background(), "uid-1") }()
 	waitUntilQueued(t, limiter, "uid-1", 1)
-	if created := sched.createdCount(); created != 4 {
-		t.Fatalf("re-arm created %d timers, want 4 (two token + two MaxWait)", created)
+	if created := sched.createdCount() - beforeSuccessor; created != 2 {
+		t.Fatalf("re-arm created %d timers, want token + MaxWait", created)
 	}
+	beforeStaleCallback := sched.createdCount()
 
 	close(released)
 	sched.waitIdle(t)
 
-	if created := sched.createdCount(); created != 4 {
+	if created := sched.createdCount(); created != beforeStaleCallback {
 		t.Fatalf("stale callback armed extra timer: created=%d", created)
 	}
 	if max := sched.maxActiveCount(); max > 2 {
@@ -449,8 +452,15 @@ func TestAccountRateLimiterStaleTimerDoesNotReplaceSuccessor(t *testing.T) {
 		t.Fatal("successor waiter was not granted")
 	}
 	sched.waitIdle(t)
+	if active := sched.activeCount(); active != 1 {
+		t.Fatalf("post-grant idle cleanup timers=%d, want 1", active)
+	}
+	nowMu.Lock()
+	now = now.Add(time.Second)
+	nowMu.Unlock()
+	sched.fireNext()
 	if active := sched.activeCount(); active != 0 {
-		t.Fatalf("timer left armed after grant: active=%d", active)
+		t.Fatalf("idle cleanup leaked timers: %d", active)
 	}
 }
 
@@ -474,15 +484,16 @@ func TestAccountRateLimiterLateTokenTimerHonorsMaxWaitDeadline(t *testing.T) {
 	if grants.Load() != 1 {
 		t.Fatalf("burst grants=%d", grants.Load())
 	}
+	beforeWait := sched.createdCount()
 
 	done := make(chan error, 1)
 	go func() { done <- limiter.Wait(context.Background(), "uid-1") }()
 	waitUntilQueued(t, limiter, "uid-1", 1)
-	if created := sched.createdCount(); created != 2 {
+	if created := sched.createdCount() - beforeWait; created != 2 {
 		t.Fatalf("queued waiter created %d timers, want token + MaxWait", created)
 	}
 
-	sched.fireAt(1)
+	sched.fireAt(beforeWait + 1)
 	select {
 	case err := <-done:
 		if !errors.Is(err, ErrDataPlaneQueueLimited) || errors.Is(err, ErrProviderRateLimited) {
@@ -498,7 +509,7 @@ func TestAccountRateLimiterLateTokenTimerHonorsMaxWaitDeadline(t *testing.T) {
 		t.Fatalf("expired waiter consumed a token: grants=%d", grants.Load())
 	}
 
-	sched.fireAt(0)
+	sched.fireAt(beforeWait)
 	sched.waitIdle(t)
 	if grants.Load() != 1 {
 		t.Fatalf("late token timer granted after expiry: grants=%d", grants.Load())
@@ -526,6 +537,7 @@ func TestAccountRateLimiterMaxWaitRaceUsesOrReturnsToken(t *testing.T) {
 	if err := limiter.Wait(context.Background(), "uid-1"); err != nil {
 		t.Fatalf("burst token: %v", err)
 	}
+	beforeWait := sched.createdCount()
 
 	done := make(chan error, 1)
 	go func() { done <- limiter.Wait(context.Background(), "uid-1") }()
@@ -533,8 +545,8 @@ func TestAccountRateLimiterMaxWaitRaceUsesOrReturnsToken(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); sched.fireAt(0) }()
-	go func() { defer wg.Done(); sched.fireAt(1) }()
+	go func() { defer wg.Done(); sched.fireAt(beforeWait) }()
+	go func() { defer wg.Done(); sched.fireAt(beforeWait + 1) }()
 	wg.Wait()
 
 	var err error

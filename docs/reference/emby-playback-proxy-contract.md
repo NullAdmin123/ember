@@ -612,6 +612,8 @@ Token 映射只证明“该 Token 曾由该 Server 签发给该 Emby 用户”�
 
 所有决策日志记录 `statusCode`；fallback 以最终 Emby 状态明确生成 `fallbackResult=success|failure`，已取得 Emby 响应时再记录 `upstreamStatus`，代理传输失败只记录固定 `proxyErrorCode`，禁止输出上游原始错误。redirect 不打印空 `fallbackSource`、零值 `upstreamStatus` 或空 `proxyErrorCode`，其他结果也省略无意义的空 task/映射字段。该日志描述 Gateway 对本次请求选择的路径和 HTTP 结果；`302` 仍只证明 Gateway 已返回重定向，不证明客户端已从 115 CDN 读取媒体字节。
 
+代理上游返回（含包装后的）`context.Canceled` 时统一返回空体 `499`，不记录上游故障错误；普通请求只保留 Debug 取消诊断，视频回退保留单条 Info `playback_canceled` 决策。真实连接错误仍按既有 `502` 处理，不能把取消归为 Provider/账号故障。
+
 ## 10. 合同测试要求
 
 实现前后至少覆盖：

@@ -8,43 +8,24 @@ import (
 
 	p115 "github.com/konghang/ember/backend/internal/integrations/p115"
 	"github.com/konghang/ember/backend/internal/services/p115account"
+	"github.com/konghang/ember/backend/internal/testutil/faketime"
 )
 
-type delayedSourceRange struct{ *fakeProvider }
-
-// HashFileRange simulates a stalled read-only source fetch, never a retained write.
-func (*delayedSourceRange) HashFileRange(ctx context.Context, _ p115.Credential, _ p115.FileRangeRequest) (p115.FileRangeHash, error) {
-	<-ctx.Done()
-	return p115.FileRangeHash{}, ctx.Err()
-}
-
-// TestSourceReadBudgetFallsBackWithoutAccountFailure covers both source stages
-// and caller cancellation, with no actual network or production-duration wait.
+// TestSourceReadBudgetFallsBackWithoutAccountFailure expires a directory
+// budget on a fake clock without starting a retained upload or poisoning health.
 func TestSourceReadBudgetFallsBackWithoutAccountFailure(t *testing.T) {
-	for _, rangeRead := range []bool{false, true} {
-		health := &fakeAccountHealthReporter{}
-		provider := newFakeProvider()
-		service := newServiceWithDependencies(fakeAccountLoader{health: health}, provider, &fakeTaskStore{}, &fakeTaskLocker{})
-		service.sourceReadBudget = time.Millisecond
-		if rangeRead {
-			service.provider = &delayedSourceRange{provider}
-		} else {
-			service.provider = &lifecycleProvider{fakeProvider: provider, resolve: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}
-		}
-		_, err := service.Resolve(context.Background(), fixtureResolveRequest())
-		if !errors.Is(err, ErrSourceReadTimeout) {
-			t.Fatalf("range=%t error=%v", rangeRead, err)
-		}
-		if rangeRead {
-			if len(health.events) != 1 || health.events[0].outcome != p115account.RuntimeHealthSucceeded {
-				t.Fatalf("source observation lost: %+v", health.events)
-			}
-		} else if len(health.events) != 0 {
-			t.Fatal("local budget marked account unhealthy")
-		}
-		if len(provider.uploadRequests) != 0 {
-			t.Fatal("timed out read started retained upload")
-		}
+	clock := faketime.New(time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+	health := &fakeAccountHealthReporter{}
+	base := newFakeProvider()
+	provider := &lifecycleProvider{fakeProvider: base, resolve: func(ctx context.Context) error {
+		clock.Advance(30 * time.Second)
+		return ctx.Err()
+	}}
+	service := newServiceWithDependencies(fakeAccountLoader{health: health}, provider, &fakeTaskStore{}, &fakeTaskLocker{})
+	service.sourceReadTimeout = clock.WithTimeout
+	_, err := service.Resolve(context.Background(), fixtureResolveRequest())
+	if !errors.Is(err, ErrSourceReadTimeout) || len(health.events) != 0 || len(base.uploadRequests) != 0 {
+		t.Fatalf("directory timeout=%v healthEvents=%d uploads=%d", err, len(health.events), len(base.uploadRequests))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -54,18 +35,15 @@ func TestSourceReadBudgetFallsBackWithoutAccountFailure(t *testing.T) {
 }
 
 // TestSourceReadBudgetsAlignWithDirectoryFlight locks the production path
-// budget to the shared 30s listing flight and the range's two bounded HTTP phases.
+// budget to the shared 30s listing flight; range budgets belong to the Provider.
 func TestSourceReadBudgetsAlignWithDirectoryFlight(t *testing.T) {
 	service := &Service{}
 	if service.sourcePathResolveLimit() != p115.SourceDirectoryResolveTimeout {
 		t.Fatalf("path budget=%s, want %s", service.sourcePathResolveLimit(), p115.SourceDirectoryResolveTimeout)
 	}
-	if service.sourceRangeReadLimit() != p115.SourceRangeReadTimeout {
-		t.Fatalf("range budget=%s, want %s", service.sourceRangeReadLimit(), p115.SourceRangeReadTimeout)
-	}
 	service.sourceReadBudget = time.Millisecond
-	if service.sourcePathResolveLimit() != time.Millisecond || service.sourceRangeReadLimit() != time.Millisecond {
-		t.Fatal("test seam must still shorten both budgets")
+	if service.sourcePathResolveLimit() != time.Millisecond {
+		t.Fatal("test seam must still shorten the directory budget")
 	}
 }
 
@@ -91,6 +69,43 @@ type localSourceRangeTimeout struct{ *fakeProvider }
 // service context expires, as with a stalled CDN or signed-URL request.
 func (*localSourceRangeTimeout) HashFileRange(context.Context, p115.Credential, p115.FileRangeRequest) (p115.FileRangeHash, error) {
 	return p115.FileRangeHash{}, p115.ErrSourceRangeTimeout
+}
+
+type inspectSourceRangeContext struct {
+	*fakeProvider
+	t             *testing.T
+	reads, failAt int
+}
+
+// HashFileRange requires the Provider to own its stage budgets, then simulates
+// a local expiry so the service must preserve its sentinel through mapping.
+func (provider *inspectSourceRangeContext) HashFileRange(ctx context.Context, credential p115.Credential, request p115.FileRangeRequest) (p115.FileRangeHash, error) {
+	if _, competing := ctx.Deadline(); competing {
+		provider.t.Error("service added an outer source-range deadline")
+	}
+	provider.reads++
+	if provider.reads == provider.failAt {
+		return p115.FileRangeHash{}, p115.ErrSourceRangeTimeout
+	}
+	return provider.fakeProvider.HashFileRange(ctx, credential, request)
+}
+
+// TestSourceRangeDoesNotRaceProviderPhaseDeadlines locks both preID and
+// challenge paths to the Provider-owned deadline and its original failure scope.
+func TestSourceRangeDoesNotRaceProviderPhaseDeadlines(t *testing.T) {
+	for _, failAt := range []int{1, 2} {
+		base := newFakeProvider()
+		if failAt == 2 {
+			base.uploadResults = []p115.RapidUploadResult{{Status: p115.RapidUploadRangeChallenge,
+				Challenge: &p115.RapidUploadChallenge{SignKey: "fixture-key", Range: p115.ByteRange{Start: 0, End: 9}}}}
+		}
+		provider := &inspectSourceRangeContext{fakeProvider: base, t: t, failAt: failAt}
+		service := newServiceWithDependencies(fakeAccountLoader{}, provider, &fakeTaskStore{}, &fakeTaskLocker{})
+		_, err := service.Resolve(context.Background(), fixtureResolveRequest())
+		if !errors.Is(err, ErrSourceReadTimeout) || provider.reads != failAt {
+			t.Fatalf("read=%d error=%v", provider.reads, err)
+		}
+	}
 }
 
 // TestAdapterSourceRangeTimeoutDoesNotRetryTransfers covers both preID and
