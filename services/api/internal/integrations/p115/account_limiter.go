@@ -133,8 +133,9 @@ func isFiniteRate(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
-// attachDataPlaneLimiter installs the production per-account limiter.
-// Test adapters keep a nil limiter unless a case opts in.
+// attachDataPlaneLimiter installs the process-shared production UID limiter;
+// its environment policy is read on first construction. Test adapters keep a
+// nil limiter unless a case opts in.
 func attachDataPlaneLimiter(adapter *CookieHTTPAdapter) {
 	if adapter == nil {
 		return
@@ -439,6 +440,8 @@ func (limiter *accountRateLimiter) disarmTimerLocked(bucket *tokenBucket) {
 	}
 }
 
+// armTimerLocked schedules the next FIFO grant or, when idle, natural full
+// refill cleanup. Depleted buckets cannot be deleted just to refresh a burst.
 func (limiter *accountRateLimiter) armTimerLocked(accountKey string, bucket *tokenBucket) {
 	limiter.disarmTimerLocked(bucket)
 	idle := bucket.waiters.Len() == 0

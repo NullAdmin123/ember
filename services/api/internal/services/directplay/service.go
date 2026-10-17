@@ -1342,7 +1342,8 @@ func normalizeSHA1(value string) (string, error) {
 }
 
 // mapProviderFailure exposes a stable fallback category while preserving the
-// failed operation; file failures never become account protocol failures.
+// failed operation. Known file sentinels map separately; a protocol fallback
+// reason alone does not imply that runtimeHealthOutcome reports account error.
 func mapProviderFailure(operation string, err error) error {
 	if err == nil {
 		return nil

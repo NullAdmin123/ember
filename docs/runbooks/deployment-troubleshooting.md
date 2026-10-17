@@ -139,7 +139,8 @@ docker compose --profile gateway logs --tail=200 redis ember-gateway
    | 旧版 `code=application_header_invalid route=authentication` | Gateway 在请求到达 Emby 前返回 `401`，不是 Emby 已判定密码错误。修复提交 `e611675` 已移除此登录门槛；新部署仍出现时先核对运行镜像和实例版本 |
    | `code=authentication_metadata_unavailable reasonCode=application_header_invalid` 等 Debug 记录 | 新版仅表示审计元数据无法采集，请求继续转发；不能把其中的 reasonCode 当成旧版本地拒绝 |
    | 已确认运行修复版本，`request_completed route=authentication statusCode=400/401/403/500` | 精确认证路由保留了上游返回的状态；结合 Emby 侧同一请求证据判断原因，不能把所有 `401/403` 都归为密码错误 |
-   | `code=upstream_unavailable`，请求返回 `502` | Gateway 到上游的传输失败，先核对可达性与上游运行状态，不按凭据错误处理 |
+   | `code=upstream_unavailable`，请求返回 `502` | Gateway 到上游的真实传输失败，先核对可达性与上游运行状态，不按凭据错误处理 |
+   | `499`，视频为 `playback_canceled + proxyErrorCode=request_canceled`，普通代理仅有 Debug 取消诊断 | 代理请求已取消，不误判为 Emby/115 宕机；视频保留单条 Info 决策，不代表客户端收到回退视频 |
    | 登录 `200`，同时有 `authentication_response_invalid`、`authentication_response_decode_failed`、`authentication_response_read_failed`、`authentication_response_too_large` 或 `authentication_mapping_failed` | 上游成功响应已透传，但本地映射未建立；继续检查有界旁路解析、上游身份与用户绑定、存储错误。不能将客户端拿到 `200` 等同于整条登录链路通过 |
    | 登录后出现 `token_header_invalid` 或 `token_rejected` | 查看失败请求的 path、载体数量和固定原因。前者涉及 Token 缺失/无效/歧义；后者涉及映射、撤销或身份不匹配。需与本次登录关联，不能用别的客户端的映射成功日志排除问题 |
 
@@ -153,7 +154,13 @@ docker compose --profile gateway logs --tail=200 redis ember-gateway
 
 需要包端证据时使用 [Gateway 抓包与播放排查](./gateway-packet-capture.md)：脚本位于 `scripts/gateway-capture/`，支持参数化 SSH 跳板、已有容器 PID 发现与离线分析，原始包和分析产物放在仓库外。
 
-preID/challenge 读取使用独立的源取链和 CDN Range 窗口，各最多 5 秒、整次读取最多 10 秒，并继续受加速总 deadline 与客户端取消约束。查看 Debug `source_range_completed sourceDownloadMs/rangeReadMs/durationMs`，再对照各自的 `provider_operation_completed stage=download_url|source_range`：前者区分取链与实际读取，后者区分 DNS、建连、TLS、等待响应头等阶段。取链失败时不会继续请求 CDN；本地预算耗尽仍为 `source_read_timeout`，不应据此判定账号失效。旧版本的 `source_range` trace 包含内嵌取链回调，不能直接把其 `firstByteMs/connectMs` 当作单次 CDN 请求指标；先核对部署提交与合同文档。
+preID/challenge 读取使用独立的源取链和 CDN Range 窗口，各最多 5 秒，名义窗口之和为 10 秒；当前 Service/Adapter 不再额外套竞争的 10 秒总定时器，仍受加速总 deadline 与客户端取消约束。查看 Debug `source_range_completed sourceDownloadMs/rangeReadMs/durationMs`，再对照各自的 `provider_operation_completed stage=download_url|source_range`：前者区分取链与实际读取，后者区分 DNS、建连、TLS、等待响应头等阶段。取链失败时不会继续请求 CDN；本地预算耗尽仍为 `source_read_timeout`，不应据此判定账号失效。旧版本的 `source_range` trace 包含内嵌取链回调，不能直接把其 `firstByteMs/connectMs` 当作单次 CDN 请求指标；先核对部署提交与合同文档。
+
+按需 PlaybackInfo 只合并相同 mapping/item/mediaSource/device/Token 摘要；证明复用先筛选完整身份。proof、独立起播许可与播放关联各自最多 4096 条、每 mapping 64 条，满载优先淘汰本 mapping 最旧记录；不能仅凭一次缓存 miss 断言账号故障。停止事件被 Emby 成功接受后，租约更新有独立 2 秒预算，客户端此后断连不阻止释放；Emby 未接受或本次 Redis 更新失败仍按原 TTL 收口。解绑后的本地 UID 桶可能保留未回满余额/等待队列，随后自然回收；这与仍受原 TTL 约束的 Redis 播放占用是两类状态。
+
+秒传初始化的 `provider_operation_completed stage=rapid_upload` 只描述上传 POST；获取上传信息仍是独立 `cookie_get` 观测。`rapidUploadMs` 已包含整个业务调用，不能再次叠加这两条 HTTP trace 的耗时。这里只读取已获授权的日志；真实复现仍须单独授权。
+
+文件与账号故障先按 [运行期失败分类](../reference/p115-cookie-playback-contract.md#102-运行期失败分类) 区分：`file_unavailable`、秒传业务结果拒绝和本地文件校验不写账号故障；即使 reason 为 `provider_protocol`，也要核对具体操作是否存在健康回写。downurl/通用 GET 读取中断且 context 有效仍是 1 分钟临时冷却；HTTP `429` 保留限流冷却，裸 `403` 保留临时不可用冷却。未知业务 errno 不类推账号风控。
 
 在设置中心临时开启 `LOG_LEVEL=debug`，等待至少 5 秒后分别复现“仅打开详情”和“点击播放直到出画，再停止”。记录客户端版本、平台、部署提交及操作时间，不收集原始鉴权 Header、事件 body 或 CDN URL。
 

@@ -572,7 +572,7 @@ MediaGapScan                    （缺集扫描持久化记录，advisory lock �
 | Status | enum | status | `pending` / `active` / `expired` / `error` / `cooling_down` / `revoked` |
 | Enabled | bool | enabled | 是否允许进入播放链路；创建和 Cookie 轮换后固定为 false |
 | LastValidatedAt | *time.Time | lastValidatedAt | 最近凭证验证时间 |
-| LastSucceededAt | *time.Time | lastSucceededAt | 最近显式验证成功或完整 DirectPlay 候选成功采样时间；持续健康播放按 1 分钟限频，恢复立即写入 |
+| LastSucceededAt | *time.Time | lastSucceededAt | 最近显式验证或实际账号成功观察时间；source 路径及文件身份解析成功可独立结算，playback 需要新下载接口成功；缓存命中不伪造成功。持续健康成功按 1 分钟采样，首次/恢复立即写入 |
 | CooldownUntil | *time.Time | cooldownUntil | 账号共享冷却或半开探测租约截止时间。冷却时长按错误类型与配置：`provider_unavailable` 默认 1 分钟；`provider_rate_limited` / `provider_risk_control` 默认 15 秒 / 30 秒，可由 `P115_RATE_LIMIT_COOLDOWN` / `P115_RISK_CONTROL_COOLDOWN` 覆盖。冷却到期后半开探测另将本字段延长 1 分钟租约 |
 | LastErrorCode | *string(100) | lastErrorCode | 最近脱敏错误码 |
 | LastErrorMessage | *string(500) | lastErrorMessage | 最近脱敏错误信息 |
@@ -592,9 +592,11 @@ MediaGapScan                    （缺集扫描持久化记录，advisory lock �
 - 启用前必须同时满足 `active`、非空 `provider_user_id` 和非空 `last_validated_at`；检查与更新在事务行锁内完成
 - 验证回写必须匹配发起请求时的 Cookie 密文，防止并发轮换后旧验证结果覆盖新凭证状态
 - DirectPlay 运行期回写同时匹配加载凭证时的 Cookie 密文、`config_version` 和 `updated_at`；旧请求不能覆盖 Cookie 轮换、显式验证、手工启停或更新后的健康结果
-- `credential_rejected` 进入 `expired + disabled`；`provider_unavailable` 保留启用意图并进入 1 分钟 `cooling_down`；`provider_rate_limited` / `provider_risk_control` 同样保留启用意图，分别默认冷却 15 秒 / 30 秒；`provider_protocol` 进入 `error`；本地数据面排队超限不回写 `last_error_code` 或冷却；成功签发完整候选后恢复 `active` 并清空冷却和错误；持续健康成功的 `last_succeeded_at` 按 1 分钟采样，错误和恢复不延迟。裸 HTTP `403` 回写 `provider_unavailable`，不触发风控冷却；`provider_risk_control` 哨兵待真实结构化错误码接入
+- `credential_rejected` 进入 `expired + disabled`；`provider_unavailable` 保留启用意图并进入默认 1 分钟 `cooling_down`；HTTP `429` 的 `provider_rate_limited` 默认冷却 15 秒，风控 sentinel 默认 30 秒，均可按既有配置覆盖。裸 HTTP `403` 沿用 1 分钟临时不可用冷却，不触发风控；当前尚无已验证的结构化风控 HTTP 触发源
+- 只有账号级 `provider_protocol` 回写才进入 `error`；`ErrFileUnavailable`、过期/空/负并发下载候选、秒传业务结果拒绝与目标/challenge 文件校验不写故障。source 路径和源 preID/challenge 的业务/协议失败也隔离。fallback 的 `provider_protocol` 原因不等于已写 `last_error_code`；完整区分见 [Cookie 运行期失败分类](./p115-cookie-playback-contract.md#102-运行期失败分类)
+- 本地排队超限、源读取预算耗尽、请求取消不回写故障；真实成功观察可恢复并清除冷却/错误，持续健康观察按 1 分钟采样；已有凭证代际条件与状态恢复边界保持
 - 未到期冷却不读取运行期 Cookie；冷却到期后在 PostgreSQL 行锁内延长 1 分钟租约并只放行一个半开探测，成功立即恢复，失败重新开始冷却
-- 个人账号解绑不物理删除：事务内写入不可复活 `revoked + disabled`，清空 owner、凭证、Provider、目录、并发和健康字段，保留 ID/role/alias/authMode/时间供 transfer provenance 引用
+- 个人账号解绑不物理删除：事务内写入不可复活 `revoked + disabled`，清空 owner、凭证、Provider、目录、并发和健康字段，保留 ID/role/alias/authMode/时间供 transfer provenance 引用；只有提交成功后才以该事务旧 Provider UID 通知本进程限流器。失败/回滚/重复解绑不误清理，未回满余额与等待队列保留至自然回收，不删除 Redis 租约，也不新增数据库字段
 - 个人 `maxConcurrentStreams` 在 Service 层限制为 `1..100`，并受当前有效套餐正数 `SimultaneousStreamLimit` 约束；已启用账号遇到套餐降低时数据库配置不回写，运行时使用两者较小值
 
 ### 2.21 PlaybackTransferTask（115 播放秒传任务）

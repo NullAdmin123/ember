@@ -2,7 +2,7 @@
 
 > 状态：代码与自动化验证完成，用户反馈正常播放通过，待补分项取证
 > 负责人：Ember
-> 更新时间：2026-09-22
+> 更新时间：2026-10-17（同步设备隔离、容量与停止收口）
 
 ## 背景与当前事实
 
@@ -46,19 +46,21 @@
 
 - 经身份校验且被 Emby 成功接受的 Stopped 撤销当时已记录的对应许可；该动作不依赖 Redis 是否找到租约或租约服务是否可用。不取消在途 PlaybackInfo；之后成功返回的显式客户端起播 POST 仍是新的授予事件，不新增停止 tombstone/epoch。
 - MediaSourceId 存在时清精确 source；缺失时清同身份、条目和 session 的所有 source。其他用户、设备或 session 不受影响。
-- 保留普通媒体 proof 与十分钟媒体/下载地址缓存，下一次客户端明确起播可取得新许可并复用缓存。
+- 保留普通媒体 proof 与十分钟媒体/下载地址缓存，下一次客户端明确起播可取得新许可并复用缓存。成功事件的租约更新使用 `WithoutCancel + 2s timeout`，客户端在 Emby 接受后断连不阻止停止释放；未成功转发仍不更新。
 - 不等待 Playing，也不通过 Range、Purpose 或缺少 PlaySessionId 猜测播放意图。
 - 未提供明确起播字段的播放器在目标不存在时回退 Emby；本次不承诺这些客户端仍能首次 115 加速。
 
 ### 4. 响应乱序与日志分类修复
 
-- 内部 GET 在实际 singleflight owner 中同锁复查当前 proof，未命中才登记请求期发布令牌；缓存首次查询与登记不能留下锁外间隙。
-- 令牌复用 proof 缓存的 mutex，区分内部 GET 与客户端响应观察，按 mapping/item 隔离且共用有界容量；失效但尚未退出的观察继续占容量，不淘汰仍在途令牌。实际 owner/响应观察所有退出路径释放，不保留持久 tombstone 或后台状态。
+- 内部 GET 的 singleflight 键按 mapping/item/mediaSource/device/Token-SHA256 隔离，不保留明文 Token。实际 owner 同锁复查完整 Principal 匹配的最新 proof，未命中才登记发布令牌；其他设备的新证明不遮蔽本设备结果，缓存首次查询与登记不能留下锁外间隙。
+- 令牌复用 proof 缓存的 mutex，区分内部 GET 与客户端响应观察，客户端按 mapping/item 保持权威替换，内部发布另按 device 隔离；两类令牌共用有界容量，失效但尚未退出的观察继续占容量，不淘汰仍在途令牌。实际 owner/响应观察所有退出路径释放，不保留持久 tombstone 或后台状态。
 - 客户端响应入口原子执行旧快照/两类旧令牌失效，并登记本次客户端观察；终态只在该令牌仍有效时原子替换整个 item，失败、空或无效响应也以空快照结束。另一客户端已先开始更新时，旧响应成功或失败均不再修改新版快照。
-- 内部 GET 发布时在同一锁内检查令牌并替换整 item 快照，保持原先完整响应使旧 source 失效的合同；只废弃同 item 其他内部令牌，不撤销仍在读取 body 的客户端观察。客户端终态会再次废弃读 body 期间新登记的内部发布，堵住失效/读取/写入之间的窗口；无关 mapping/item 不受影响。
+- 内部 GET 发布时在同一锁内检查令牌并替换同 mapping/item/device 的整 item 快照，保持同设备完整响应使旧 source 失效的合同；只废弃同设备其他内部令牌，其他设备可独立发布，不撤销仍在读取 body 的客户端观察。客户端终态会再次废弃读 body 期间新登记的内部发布，堵住失效/读取/写入之间的窗口；无关 mapping/item 不受影响。
 - 过时的内部结果直接丢弃并走既有 fallback，不把新版客户端 proof/起播许可借给旧请求，也不延长许可或放宽 generation 检查。
 - 该请求期保护不扩展 Stopped 语义：停止仍撤销当时已记录的许可，不取消尚未完成的新显式 POST。
 - `playback_intent_required` 保持 `code=direct_play_fallback`，但输出 `directPlayResult=skipped` 与“无起播许可，跳过新增转存”；其他真实 DirectPlay 错误继续 `failure`。`fallbackResult`、HTTP 状态和 info/warn 仍由实际 Emby 响应决定，不把所有 404 静默降级。
+
+proof、独立起播许可与播放关联分别保留全局 4096 条、每 mapping 64 条上限，满载优先淘汰本 mapping 最旧记录并接纳新记录；新 mapping 在全局已满时使用全局最旧记录腾位。相同时间按写入顺序处理。在途发布令牌不能套用该淘汰策略，其容量仍随实际 owner 退出回收。该容量与设备修复已有 fake/race 证据，不能视为真实客户端压力验收。
 
 ## 影响范围
 

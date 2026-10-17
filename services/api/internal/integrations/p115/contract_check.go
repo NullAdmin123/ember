@@ -336,8 +336,8 @@ func providerContractFailure(stage string, err error) error {
 	return contractFailure(stage, providerContractErrorCode(err), err)
 }
 
-// providerContractErrorCode maps every stable Provider sentinel to a fixed
-// checker code. Unknown errors stay "unknown" instead of leaking text.
+// providerContractErrorCode maps the listed Provider sentinels to fixed checker
+// codes. Unlisted sentinels and unknown errors stay "unknown" without raw text.
 func providerContractErrorCode(err error) string {
 	switch {
 	case errors.Is(err, context.Canceled):

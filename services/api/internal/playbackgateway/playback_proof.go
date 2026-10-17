@@ -212,8 +212,8 @@ func (cache *playbackProofCache) ReleasePublication(guard *playbackProofPublishG
 	delete(cache.publications, guard)
 }
 
-// PublishOnDemand replaces the complete item snapshot only while its request
-// guard remains current. Publication invalidates competing internal requests,
+// PublishOnDemand replaces one device's complete item snapshot only while its
+// request guard remains current. It invalidates competing internal requests,
 // including other sources on the same device, so late responses cannot reverse
 // that device's newer state or supersede a different device's pending response.
 func (cache *playbackProofCache) PublishOnDemand(guard *playbackProofPublishGuard, proofs []PlaybackProof) (int, bool) {

@@ -80,9 +80,9 @@ python3 -B scripts/gateway-capture/gateway_capture.py logs \
 
 也可省略 metadata，明确填写带时区的 `--since` 与 `--until`；二者不可与 metadata 同时使用。元数据 epoch 转为 UTC 是 PCAP/Docker 外部时间合同，不改变 Ember 的 `CRON_TIMEZONE`。日志默认 `--tail 10000`，最大 20000；窗口内日志超过 tail 时较早记录会缺失，不能据此声称某一步没有发生。
 
-远端先按 code/字段白名单过滤，原始 Docker 日志不传回本机。输出包括最终加速决策、源目录/取链/Range 计时、PlaybackInfo 意图状态、租约及停止事件；密码、Cookie、Token、原始 path、媒体路径、完整响应和任意 message 不输出。未知 code 或字段会被忽略；日志定义增加后需同步过滤规则。
+远端先按 code/字段白名单过滤，原始 Docker 日志不传回本机。输出包括白名单内的加速决策、源目录/取链/Range/秒传 POST 计时、PlaybackInfo 意图状态、租约及停止事件；密码、Cookie、Token、原始 path、媒体路径、完整响应和任意 message 不输出。未知 code 或字段会被忽略；日志定义增加后需同步过滤规则。
 
-原文件匹配诊断保留固定 `video_original_mp4_accepted` / `video_original_mkv_accepted` 与 `evidence=local_mp4_proof|local_mkv_proof`；未知 evidence 丢弃。匹配诊断只证明受限路径通过媒体证明检查，不证明随后一定返回 302 或已经完成播放。
+原文件匹配诊断保留固定 `video_original_mp4_accepted` / `video_original_mkv_accepted` 与 `evidence=local_mp4_proof|local_mkv_proof`；未知 evidence 丢弃。匹配诊断只证明受限路径通过媒体证明检查，不证明随后一定返回 302 或已经完成播放。当前日志工具的 `_CODES` 尚未包含 `playback_canceled`，这类新 Info 取消决策会被过滤；筛选结果缺行不能证明未取消。需要判断取消时，使用已授权取得的 Gateway 脱敏日志核对 `499`/取消 code，不放开未知 code 或原始日志透传。
 
 ## 4. 离线分析与对照
 
@@ -141,4 +141,4 @@ python3 -B -m unittest discover -s scripts/gateway-capture/tests -v
 
 旧共享 5 秒 preID 预算分别在 TLS 和等待响应头阶段耗尽。第二例源取链约 2.37 秒、CDN TCP 建连约 183 ms，未观察到 SYN 重传，因此不能只归因于 TCP 重传。旧 `source_range.firstByteMs` 还混入取链响应，不能当作 CDN 首字节。
 
-修复提交 `248dedb6` 将取链/Range 各限 5 秒、每次源片段总限 10 秒，并分离 trace。单元测试不证明部署后的起播效果；持续失败时回退可能更晚。按同样的首播/停止/重播步骤采集修复部署，才能判断实际效果。更完整的当前行为定义见 [115 合同](../reference/p115-cookie-playback-contract.md#71-源读取故障诊断与预算2026-10-12) 与 [端到端流程](../reference/p115-playback-end-to-end-flow.md)。
+历史修复提交 `248dedb6` 将取链/Range 各限 5 秒、另设每次源片段总限 10 秒并分离 trace。后续 `d3f6fed` 已移除 Service/Adapter 竞争的外层 10 秒定时器；当前仍各保留 5 秒阶段窗口和调用方更早 deadline，以保留实际失败阶段。单元测试不证明部署后的起播效果；持续失败时回退可能更晚。按同样的首播/停止/重播步骤采集修复部署，才能判断实际效果。更完整的当前行为定义见 [115 合同](../reference/p115-cookie-playback-contract.md#71-源读取故障诊断与预算2026-10-12) 与 [端到端流程](../reference/p115-playback-end-to-end-flow.md)。

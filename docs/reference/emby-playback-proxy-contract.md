@@ -333,7 +333,7 @@ Gateway 保持普通 proof 的授权含义，另在同一个进程缓存中记�
 - 成功转发给 Emby 的 Stopped 撤销当时已记录的对应许可，独立于 Redis 是否有租约。事件不带 MediaSourceId 时清同身份、条目和 session 的全部 source；不影响其他会话、普通 proof 或十分钟跨会话缓存。不取消在途 PlaybackInfo；之后成功返回的显式客户端起播 POST 仍作为新的授予事件。
 - 这是“开始新转存时”的短期许可，TTL 内失败允许重试，不是一次性票据；通过该准入后，后续停止或过期不会回滚已开始的转存。Range、Purpose 和 Playing 仍不是首次转存的前置条件。
 
-2026-09-29 Infuse `8.5.5` / 目标 Emby `4.9.3.0` 日志确认：客户端 JSON POST 明确 `IsPlayback=true`，但响应的 DirectPlay/DirectStream 均为 false；随后内部 GET 返回 true 且使用另一会话。能力差异的外部原因未证实，Gateway 不改写能力字段。当前实现将这种身份有效、本地路径明确、仅因 DirectPlay 不支持而拒绝的响应意图，保存在 proof 缓存同一锁内的有界集合（最多 4096 条），不把它变成媒体证明。之后独立合格的内部 proof 只有完整 principal、条目、source、路径、Container 匹配且已知 Size 一致时，才能继承剩余许可；每份意图最多绑定一个补查 session，不从 GET 重新计时。新的客户端响应清除旧意图；原客户端 session 或已绑定补查 session 的成功 Stopped 都撤销许可，停止期间在途内部 GET 不得恢复它。显式客户端响应仍遵循既有发布令牌规则。没有客户端明确信号的 GET、详情、Playing/Range 不能生成许可。Debug `playback_transfer_intent_retained` / `playback_transfer_intent_inherited` 分别标识保留与匹配继承；日志不输出原始 session。该变更已覆盖 mock 完整 POST→补查→视频→转存准入链路，真实播放器与 115 部署后验收仍待完成。
+2026-09-29 Infuse `8.5.5` / 目标 Emby `4.9.3.0` 日志确认：客户端 JSON POST 明确 `IsPlayback=true`，但响应的 DirectPlay/DirectStream 均为 false；随后内部 GET 返回 true 且使用另一会话。能力差异的外部原因未证实，Gateway 不改写能力字段。当前实现将这种身份有效、本地路径明确、仅因 DirectPlay 不支持而拒绝的响应意图，保存在 proof 缓存同一锁内的有界集合（全局最多 4096 条、每 mapping 最多 64 条，满载优先淘汰本 mapping 最旧记录），不把它变成媒体证明。之后独立合格的内部 proof 只有完整 principal、条目、source、路径、Container 匹配且已知 Size 一致时，才能继承剩余许可；每份意图最多绑定一个补查 session，不从 GET 重新计时。新的客户端响应清除旧意图；原客户端 session 或已绑定补查 session 的成功 Stopped 都撤销许可，停止期间在途内部 GET 不得恢复它。显式客户端响应仍遵循既有发布令牌规则。没有客户端明确信号的 GET、详情、Playing/Range 不能生成许可。Debug `playback_transfer_intent_retained` / `playback_transfer_intent_inherited` 分别标识保留与匹配继承；日志不输出原始 session。该变更已覆盖 mock 完整 POST→补查→视频→转存准入链路，真实播放器与 115 部署后验收仍待完成。
 
 未提供该明确信号的客户端在目标不存在时使用 Emby fallback，不能承诺首次 115 加速。此策略的自动化与真实客户端证据分别见 [实施方案](../plan/architecture/p115-transfer-playback-intent.md)；不新增 SQL、配置或对外字段。
 
@@ -590,7 +590,7 @@ Token 映射只证明“该 Token 曾由该 Server 签发给该 Emby 用户”�
 - 开始和停止成功在 Info 分别记录 `playback_session_started/playback_session_stopped`；正常 Progress 成功只在 Debug 记录 `playback_progress_reported`，避免心跳刷屏。失败后同一请求 Token 的首次 Start/Progress 成功在 Info 额外记录一次 `playback_progress_recovered` 和 `interruptionMs`；关联键由进程内随机 seed 生成且永不输出，恢复观察最多 4096 条、TTL 6 小时，不保存原始 Token 或可跨进程复用摘要，只服务日志，不参与授权、并发或响应决策。
 - 请求日志与事件成功/失败结果携带本地生成的 requestId；视频决策和已解析事件使用独立的进程种子 sessionRef 关联，不复用上述 Token 恢复观察键。Debug 在认证后记录 playback_event_received 及租约更新开始/成功/缺失/跳过，成功结果展示 reserved/active/occupied，Warn 更新失败补关联信息。所有新增观测不改变请求体、Emby 响应或 Redis 流转；范围与固定字段见 [播放链路日志](./p115-playback-end-to-end-flow.md#83-单条决策日志)。
 - 设置中心数据库项 `LOG_LEVEL=debug` 时，每个经过 Gateway Handler 的请求收尾写一条 `code=request_completed` 脱敏摘要：记录有界 method/Host/原始 path、query key 名称/数量、route、pathMode、statusCode、success/failure、耗时、直接 Token Header 数量、应用头 scheme/Token presence、query Token source 数量/状态、已知 User-Agent family/version。API 保存后 Gateway 最多在 5 秒内从进程缓存刷新；TTL 到期后的并发请求只触发一次数据库读取，读取失败保留上一次有效级别且不改变请求结果。默认 `info` 不逐请求打印该详细摘要；任何级别都不得记录 query value、Header 原值、Cookie、Token 或 Authorization 内容。
-- 每个视频请求在默认 Info 额外只写一条最终决策日志，并把人工可读结论放在行首：直链成功使用 `code=direct_play_redirect message="115直链成功" result=success statusCode=302 target=p115 targetState=created|reused`；DirectPlay 失败使用 `code=direct_play_fallback message="115直链失败，Emby已返回回退响应头|Emby回退失败" directPlayResult=failure fallbackResult=success|failure fallbackTarget=emby`；其他 fallback 和 reject 分别使用 `code=playback_fallback`、`code=playback_rejected`。全部继续记录 `decision=redirect|fallback|reject`、固定 `stage/reasonCode`、`fallbackSource` 和必要 ID/耗时。进入 DirectPlay 后还记录 quoted `mediaPath/embyPathPrefix/sourceRootId/mappedRelativePath`。Debug 不重复生成第二条决策，日志不建表、不进入数据库。
+- 每个视频请求在默认 Info 额外只写一条最终决策日志，并把人工可读结论放在行首：直链成功使用 `code=direct_play_redirect message="115直链成功" result=success statusCode=302 target=p115 targetState=created|reused`；DirectPlay 失败使用 `code=direct_play_fallback message="115直链失败，Emby已返回回退响应头|Emby回退失败" directPlayResult=failure fallbackResult=success|failure fallbackTarget=emby`；其他 fallback 和 reject 分别使用 `code=playback_fallback`、`code=playback_rejected`。代理取消另使用 `code=playback_canceled result=canceled statusCode=499 proxyErrorCode=request_canceled`，保留原 decision/stage/reasonCode，不再判断回退成功/失败，也不输出故障级别日志。全部继续记录 `decision=redirect|fallback|reject`、固定 `stage/reasonCode`、`fallbackSource` 和必要 ID/耗时。进入 DirectPlay 后还记录 quoted `mediaPath/embyPathPrefix/sourceRootId/mappedRelativePath`。Debug 不重复生成第二条决策，日志不建表、不进入数据库。
 - `reasonCode=playback_intent_required` 是策略跳过，保持 `code=direct_play_fallback`，但使用 `directPlayResult=skipped` 和“无起播许可，跳过新增转存；Emby已返回回退响应头|Emby回退失败”。上游真实状态、`fallbackResult` 及 info/warn 继续按实际响应记录；404 不伪装成成功，真正 Provider 失败也不会被降成 skipped。
 - 完整媒体 Path 已按运维排障需求明确允许进入持久日志；仍禁止记录 Token、Cookie、完整 SHA1、115 URL、PlaybackInfo 原始响应、Provider 原始错误或 Emby 代理原始错误。
 - Provider 失败只允许补充固定 `providerOperation=resolve_source_path|hash_source_preid|rapid_upload|hash_source_challenge|rapid_upload_retry|verify_playback_target|search_playback_target|get_download_url`；账号加载失败只允许补充 `accountRole=source|playback`。未知诊断值必须丢弃，不能进入日志。
@@ -605,7 +605,7 @@ Token 映射只证明“该 Token 曾由该 Server 签发给该 Emby 用户”�
 | `fallback` | `route` | `route_not_accelerated`、`request_not_eligible` |
 | `fallback` | `proof` | `playback_proof_missing`、`playback_proof_expired`、`playback_proof_mismatch` |
 | `fallback` | `eligibility` | `direct_play_disabled`、`client_incompatible`、`concurrency_limited`、`media_not_direct_play` |
-| `fallback` | `direct_play` | `invalid_request`、`path_not_mapped`、`account_unavailable`、`accounts_same`、`provider_unavailable`、`provider_protocol`、`rapid_upload_unavailable`、`target_unavailable`、`download_incompatible`、`store_unavailable`、`lock_unavailable` |
+| `fallback` | `direct_play` | `invalid_request`、`path_not_mapped`、`account_unavailable`、`accounts_same`、`provider_unavailable`、`provider_protocol`、`file_unavailable`、`rapid_upload_unavailable`、`target_unavailable`、`download_incompatible`、`store_unavailable`、`lock_unavailable` |
 | `redirect` | `direct_play` | `direct_play_ready` |
 
 `fallbackTarget=emby` 时，`fallbackSource` 只允许固定值：`client_request`、`container_recovered`、`playback_info_direct_stream`、`playback_info_extension_stream`、`playback_info_augmented_stream`；redirect/reject 留空。它只描述交给 Emby 的请求来源，不包含 URL、Container、Token 或媒体路径。
@@ -642,6 +642,8 @@ Token 映射只证明“该 Token 曾由该 Server 签发给该 Emby 用户”�
 22. Web 开关默认值、无环境变量回退、连续数据库读取实时变化、开启透明代理、关闭不访问上游、读取失败 `503`、受保护 `/web` API、Item Image GET/HEAD/root/无 Index/合法与非法 int32 Index/修改/encoded/动态段边界、非法/携 Token Web path 和根 WebSocket `101` 均有 fake 合同测试；日志不得包含 query Token。
 
 所有测试必须使用 fake Emby Server 或固定 fixture，禁止请求真实 Emby。
+
+2026-10-17 A–C 补充 fake 回归覆盖 `file_unavailable` 的单条 fallback、代理取消 `499` 与非故障日志、已取消请求的成功 Stopped 释放、设备/Token 摘要合并键、匹配身份的最新证明复用，以及 proof/许可/关联的 mapping 配额与满载替换。源读取预算通过假时钟验证，未使用真实 Emby/115 或播放器证明这些新行为。
 
 ## 11. 待实机确认清单
 

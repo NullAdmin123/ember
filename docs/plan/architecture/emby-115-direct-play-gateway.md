@@ -2,7 +2,7 @@
 
 > 状态：进行中（阶段 1 核心闭环已落地并取得真实 302，完整 E2E 与阶段 2 未完成）
 > 负责人：Ember
-> 更新时间：2026-09-21
+> 更新时间：2026-10-17（同步二轮修复 A–C 的代码与本地验证边界）
 
 ## 背景
 
@@ -132,8 +132,8 @@ Gateway 的通用透明代理、客户端根路径兼容、登录前 bootstrap �
 - 新增 `playback_transfer_tasks` 模型、幂等 migration、活动内容 partial unique、终态 provenance 和 `lastAccessedAt`；`VerifySchema` 同步校验新表、代表性列和三个索引。
 - 新增不暴露 HTTP 入口的 `internal/services/directplay`，按角色加载活动账号，以 `playbackAccountId + SHA1 + size` 获取 PostgreSQL session advisory lock，锁内二次查重后编排 preID、一次 challenge、秒传、目标复核和锁外直链签发；其窄 Provider 接口不包含 `DeleteFile`。
 - 专用 PostgreSQL 集成数据库的独立 schema 已验证 migration 可重复执行、两个相同内容并发请求只调用一次 fake `InitRapidUpload`、challenge 将 `attemptCount` 记为 2、普通上传要求落为脱敏失败终态；测试不访问真实 115。
-- DirectPlay 已通过窄 `AccountHealthReporter` 回写实际调用账号：完整候选成功后按 1 分钟采样更新 source/playback `lastSucceededAt`（首次/恢复立即写入），凭证失效进入 `expired + disabled`，临时 Provider 故障进入固定 1 分钟 `cooling_down`，协议错误进入 `error`；冷却期间不请求 115，过期后通过 PostgreSQL 行锁只放行一个半开探测。
-- 运行期健康回写同时匹配请求加载时的 Cookie 密文和 `updatedAt`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或较新的运行期结果；回写使用独立 2 秒上限，失败不改变原 302/fallback 结果。fake/race 与 PostgreSQL 集成测试已覆盖冷却阻断、单探测、成功恢复、凭证停用和旧结果丢弃。
+- DirectPlay 已通过窄 `AccountHealthReporter` 回写实际调用账号：按实际成功观察分别更新 source/playback `lastSucceededAt`：source 路径及身份解析可独立结算，playback 要求实际下载接口成功；持续健康按 1 分钟采样，首次/恢复立即写入，凭证失效进入 `expired + disabled`，临时 Provider 故障进入默认 1 分钟 `cooling_down`，HTTP `429` 默认限流冷却 15 秒，风控 sentinel 默认 30 秒且当前无 HTTP 触发源；只有账号级协议错误进入 `error`，识别到的文件级失败隔离；冷却期间不请求 115，过期后通过 PostgreSQL 行锁只放行一个半开探测。
+- 运行期健康回写同时匹配请求加载时的 Cookie 密文、`config_version` 和 `updatedAt`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或较新的运行期结果；回写使用独立 2 秒上限，失败不改变原 302/fallback 结果。fake/race 与 PostgreSQL 集成测试已覆盖冷却阻断、单探测、成功恢复、凭证停用和旧结果丢弃。
 - source 账号新增 `embyPathPrefix/sourceRootId` 一对一运行位置、独立更新接口和管理员表单；`ResolveMediaPath` 已按完整目录边界转换 Emby 路径，拒绝兄弟前缀、空相对路径、`.`/`..`、反斜杠和非规范 root ID。
 - 新增 `emby_access_tokens` 模型和幂等 migration，只保存按 `emby-access-token` purpose 派生的 32 字节 HMAC；`VerifySchema` 同步校验代表性列和四个索引。
 - 新增无 HTTP 入口的 `internal/services/embytoken`，实现成功认证结果绑定、实时用户资格解析、`lastSeenAt` 限频，以及单 Token、单设备和用户全部登录软撤销；返回值、JSON、日志和错误均不包含 Token 明文或摘要。
@@ -146,7 +146,7 @@ Gateway 的通用透明代理、客户端根路径兼容、登录前 bootstrap �
 - Gateway production runtime 提供独立 `/health`、HTTP Header/空闲边界和 context graceful shutdown；进程复用 migration/VerifySchema 与 ConfigService，但不初始化 JWT、Bot、cron 或默认管理员。
 - 新增不持有 Token/HMAC/runtime ServerId 的 `ControlPlaneRevoker`；设备按用户/设备跨历史 Server 撤销，用户按主体全部撤销，恢复路径同样清理遗留活动映射。
 - 设备手工/黑名单退出、用户 toggle/admin edit、Emby 访问开关、绑定前清理、解绑、删除和过期 cron 已按“本地撤销成功后再执行状态或 Emby 副作用”接入；远端失败不回滚本地安全结果。
-- Gateway 已精确分类 GET/POST PlaybackInfo、保留 ResolvePrincipal 结果、透明观察成功响应，并在 5 分钟/4096 条有界进程内缓存中保存 mapping/item/mediaSource/playSession 证明与 MediaSource 快照；没有重复请求 Emby。
+- Gateway 已精确分类 GET/POST PlaybackInfo、保留 ResolvePrincipal 结果、透明观察成功响应，在 TTL 5 分钟、全局 4096 条、每 mapping 最多 64 条的进程缓存中保存 mapping/item/mediaSource/playSession 证明；独立起播许可与会话关联采用同一容量规则，满载优先替换本 mapping 最旧记录。透明观察客户端响应不重复请求 Emby；缺 PlaySessionId 时仍按现行合同补查，合并键包含设备和 Token 摘要。
 - PlaybackInfo 请求/响应不符合证明条件时仍透明代理但不缓存；缓存并发、TTL、容量淘汰、Token 隔离和请求/响应字节保持已有 fake 测试。2026-08-29 起响应级合同成立后的唯一 MediaSource 均按运维要求记录完整合法 Path、Size/播放能力和 proof 接受/拒绝原因，不再依赖 proof 写入成功；Token 与完整响应仍保持脱敏。
 
 仍未完成（仅统计本计划边界）：
@@ -285,7 +285,7 @@ services/api/internal/integrations/p115/
 
 约束：
 
-- 数据库对每个角色至多允许一条启用记录；网关就绪要求两个角色各有一条启用记录。
+- 管理员全局范围每个角色至多启用一条；后续个人 playback 按 owner 保留唯一非 revoked 记录。尝试 115 加速时要求唯一可运行 source 与本次路由选中的 playback，账号缺失只让本次加速 fallback，不阻止 Gateway 正常代理 Emby。
 - 两条启用记录验证出的非空 `provider_user_id` 不得相同；停用历史记录可保留同一账号标识。
 - Cookie 加密后落库，明文不得离开写入和 Provider 调用边界。
 - Cookie 更新使用覆盖语义，查询接口永不返回密文或明文。
@@ -469,10 +469,12 @@ Token 撤销已复用现有设备/用户管理入口，没有创建第二套设�
 当前状态：被动运行期健康回写与共享冷却已实现；主动定时健康检查和告警仍属于阶段 2。
 
 1. Provider 识别凭证失效后，将账号标记为 `expired + disabled`，阻止新任务和新直链。
-2. 临时 Provider 不可用按实际 source/playback 账号进入固定 1 分钟 `cooling_down`，记录截止时间和脱敏原因；协议错误进入 `error`，不伪装成凭证失效。
+2. 临时 Provider 不可用（含裸 HTTP `403`、downurl/通用 GET 的非 context 读体失败）按实际账号进入默认 1 分钟冷却；HTTP `429` 默认限流冷却 15 秒，风控 sentinel 默认 30 秒且无已验证 HTTP 触发源。只有按操作分类的账号级协议错误进入 `error`；已识别文件失败不写账号故障，完整映射见 [Cookie 运行期失败分类](../../reference/p115-cookie-playback-contract.md#102-运行期失败分类)。
 3. 冷却期间不读取 Cookie、不重复探测外部接口；到期后以 PostgreSQL 行锁和条件更新发放一个 1 分钟半开探测租约，跨 Gateway 副本也只有一个请求放行。
-4. 完整 DirectPlay 候选签发并完成必要持久化后，source/playback 恢复 `active` 并清空冷却/错误，首次和恢复立即写入 `lastSucceededAt`，持续健康成功按 1 分钟采样；运行期回写失败不得改写原始 302/fallback 结果。
-5. 所有回写匹配加载时的 Cookie 密文和 `updatedAt`；管理员更新 Cookie 后仍必须重新验证，旧播放请求不能覆盖新凭证的 `pending` 状态。
+4. source 路径及身份解析构成可独立结算的成功观察；playback 以实际下载接口成功为恢复证据，缓存命中不伪造成功。首次和恢复立即写入 `lastSucceededAt`，持续健康成功按 1 分钟采样；请求代际和既有恢复边界保持，回写失败不得改写原始 302/fallback 结果。
+5. 所有回写匹配加载时的 Cookie 密文、`config_version` 和 `updatedAt`；管理员更新 Cookie 后仍必须重新验证，旧播放请求不能覆盖新凭证的 `pending` 状态。
+
+2026-10-17 二轮修复：取链/Range 各保留 5 秒窗口且没有额外竞争的 10 秒总定时器；取消代理请求返回 `499` 而非上游故障；秒传 POST 使用独立 trace。停止成功后的 Redis 更新独立限时 2 秒，账号 tombstone 提交后才通知本进程 UID 桶清理；未回满余额和队列保留至自然回收。对应 A–C 已通过 Go 全量 vet/test/build、定向 race、fake 与 SQL mock；没有新增 schema 或真实 PostgreSQL/115/Emby/Redis/客户端验收，不改变本计划剩余项或归档条件。
 
 ### 7. 失败与安全边界
 
