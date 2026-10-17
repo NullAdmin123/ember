@@ -2,6 +2,7 @@ package playbackgateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,8 +48,8 @@ type onDemandPlaybackInfoFlightGroup struct {
 
 var errOnDemandPlaybackInfoInvalid = errors.New("on-demand playback info invalid")
 
-// resolvePlaybackInfoOnDemand coalesces concurrent resolution of one mapped
-// item/source while allowing each waiting client request to cancel independently.
+// resolvePlaybackInfoOnDemand coalesces resolution only for the same mapped
+// item/source, device and credential; each waiter can cancel independently.
 func (gateway *Gateway) resolvePlaybackInfoOnDemand(
 	request *http.Request,
 	principal embytoken.Principal,
@@ -59,15 +60,21 @@ func (gateway *Gateway) resolvePlaybackInfoOnDemand(
 	if gateway == nil || gateway.playbackInfoFlights == nil || request == nil {
 		return onDemandPlaybackInfo{}, "invalid_request"
 	}
-	if proof, ok := gateway.proofs.LookupLatestMediaSource(principal.MappingID, itemID, mediaSourceID); ok &&
-		playbackProofMatchesPrincipal(proof, principal) {
+	if proof, ok := gateway.proofs.LookupLatestMediaSource(principal, itemID, mediaSourceID); ok {
 		return gateway.reuseOnDemandPlaybackProof(request, principal, proof), ""
 	}
-	key := principal.MappingID + "\x00" + itemID + "\x00" + mediaSourceID
+	key := playbackInfoFlightKey(principal, itemID, mediaSourceID, accessToken)
 	return gateway.playbackInfoFlights.Do(request.Context(), key, func() (onDemandPlaybackInfo, string) {
 		detachedRequest := request.Clone(context.WithoutCancel(request.Context()))
 		return gateway.resolvePlaybackInfoOnce(detachedRequest, principal, accessToken, itemID, mediaSourceID)
 	})
+}
+
+// playbackInfoFlightKey isolates in-flight responses without retaining the
+// plaintext token in the process-local registry. The key is never logged.
+func playbackInfoFlightKey(principal embytoken.Principal, itemID, mediaSourceID, accessToken string) string {
+	tokenHash := sha256.Sum256([]byte(accessToken))
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%x", principal.MappingID, itemID, mediaSourceID, principal.DeviceID, tokenHash)
 }
 
 // resolvePlaybackInfoOnce asks the same Emby upstream to evaluate one

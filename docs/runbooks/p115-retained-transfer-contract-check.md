@@ -113,7 +113,7 @@ P115_TRANSFER_CHECK_EXIT=$?
 p115 transfer contract check failed: stage=<stage> code=<code> fileMayExist=<true|false> cleanupAttempted=false
 ```
 
-`code` 与只读检查器共用 `providerContractErrorCode`。HTTP 429 必须是 `provider_rate_limited`，不能写成 `unknown`。稳定码还包括 `provider_risk_control`、`data_plane_queue_limited`、`source_directory_timeout`，以及既有的 `credential_rejected` / `provider_unavailable` / `provider_protocol`。
+`code` 与只读检查器共用 `providerContractErrorCode`。HTTP 429 必须是 `provider_rate_limited`，不能写成 `unknown`。稳定码还包括 `file_unavailable`、`provider_risk_control`、`data_plane_queue_limited`、`source_directory_timeout`，以及既有的 `credential_rejected` / `provider_unavailable` / `provider_protocol`。`file_unavailable` 表示识别到的文件不可用，不是账号凭证失效；downurl errno 的公开证据仍未经真实账号证实，见 [Cookie 合同](../reference/p115-cookie-playback-contract.md#551-downurl-文件失败与-errno未经真实账号证实)。这些一次性检查器不连接 Ember 数据库，不执行运行期账号健康回写；不能把报告 code 当作账号已被冷却或停用的证明。当前 `ErrSourceRangeTimeout` 尚未列入检查器 code 映射，仍会归为 `unknown`；这与 DirectPlay 的 `source_read_timeout` 不同，不能据此推断新的外部错误语义。
 
 `fileMayExist=true` 表示 Provider 已返回 reused 或查重已命中，专用目录中可能保留目标文件。不要立即重跑；先在 playback 专用目录人工确认，并保留文件供后续快速路径验证。
 

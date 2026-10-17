@@ -6,6 +6,7 @@ import (
 )
 
 var (
+	ErrFileUnavailable            = errors.New("direct play file unavailable")
 	ErrSourceReadTimeout          = errors.New("direct play source read budget exceeded")
 	ErrInvalidRequest             = errors.New("direct play request invalid")
 	ErrAccountUnavailable         = errors.New("direct play 115 account unavailable")

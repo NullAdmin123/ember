@@ -38,7 +38,7 @@
 - 个人与共享 playback 复用同一运行期健康状态机：先按套餐路由选择不解密 Cookie 的精确账号元数据，Redis 准入成功后再按 account ID/owner 加载凭证。冷却未到期时 fallback；到期后 PostgreSQL 行锁只发放一个 1 分钟半开探测，成功恢复 `active`，失败按类型重新冷却、进入 `expired` 或 `error`。Redis 失败不消耗半开机会，两次读取间的停用、解绑、Cookie 替换或控制面配置更新均失败关闭并只释放本次新 reservation。
 - 个人账号 Cookie 替换回到 `pending + disabled`，清空旧 Provider UID 和目标目录 path/ID，保留待下次启用重新按套餐复验的并发配置；旧目录 ID 禁止跨 Provider 账号沿用。只有 `enabled` playback 必须同时具备 `active`、Cookie、Provider UID、成对目录 path/ID 和正整数并发配置；未配置完成的 pending/disabled 记录允许目录和并发为空。
 - 个人账号解绑使用不可复活的 `revoked` tombstone：在同一事务清空 owner、Cookie、Provider、`appType/UserAgent`、source/playback 目录、并发和健康等运行期数据，但保留账号 ID、role、后端固定 alias、auth mode、revoked/disabled 状态和时间供 transfer provenance 引用；owner 外键使用 `ON DELETE RESTRICT`，确保未完成 tombstone 的活动个人账号会阻止直接删除用户，revoked 状态则保证已清空 owner 的 tombstone 不会被共享账号加载器选中。
-- Redis 同时维护账号/用户的占用与真实活跃索引：合格 GET 在 302 前只建立 `30s reservation` 并参与账号并发准入，HEAD 无既有租约时直接 fallback；成功 Playing/Progress 才晋级为 `active` 并刷新 `2m` TTL，暂停继续占用并刷新 `15m` TTL，Stopped 成功转发后释放。Sorted Set 的过期 member 每次脚本按 Gateway 可注入时钟清理并不再计数，account/user `leases + active` 另使用 `16m` Key TTL 回收无后续请求的空闲索引。三类业务 TTL 首期使用代码常量，不增加环境变量或后台配置；用户索引只用于展示、归因和后续治理，不参与第二套并发门控。
+- Redis 同时维护账号/用户的占用与真实活跃索引：合格 GET 在 302 前只建立 `30s reservation` 并参与账号并发准入，HEAD 无既有租约时直接 fallback；成功 Playing/Progress 才晋级为 `active` 并刷新 `2m` TTL，暂停继续占用并刷新 `15m` TTL，Stopped 成功转发后释放。成功事件的租约更新使用保留请求上下文值的 `WithoutCancel + 2s timeout`，客户端在 Emby 接受后断连不取消这次更新；未成功转发仍不更新。Sorted Set 的过期 member 每次脚本按 Gateway 可注入时钟清理并不再计数，account/user `leases + active` 另使用 `16m` Key TTL 回收无后续请求的空闲索引。三类业务 TTL 首期使用代码常量，不增加环境变量或后台配置；用户索引只用于展示、归因和后续治理，不参与第二套并发门控。
 - Redis 账号索引键使用规范化 Provider UID 的服务端用途隔离 HMAC，不使用数据库账号 ID、owner 或 Ember 用户 ID，也不暴露原始 Provider UID；解绑只擦除持久凭证并停止新 `302`，不删除仍可能对应已签发 CDN URL 的 Redis 占用。同一真实 115 账号以新数据库 ID 重新绑定时仍命中旧租约，不同 Provider UID 不继承；现有会话由成功 `Stopped` 或 TTL 收口。
 - Redis 可用且命令成功时，当前 Key 是占用和转存用量的唯一真相源；Key 不存在按零处理。不锁定或探测 Redis 版本，只使用 Lua/Sorted Set/TTL 通用能力；首期只支持单 Gateway，所有 score 和套餐窗口使用 Gateway 可注入时钟与全局 `CRON_TIMEZONE`，不承诺多 Gateway、Redis Cluster 或跨主机时钟兼容。Redis 重启或数据丢失后的计数重置是已接受行为，不增加 epoch、恢复等待、数据库重建或历史补偿。
 - 套餐组提供用户小时/每日转存限额，默认每小时 `5`、每天 `10`；小时范围固定 `1..100`，每日范围固定 `1..1000`，`0` 非法，越界直接拒绝且不截断，两者不要求大小关系。只有目标缺失且秒传、目标复核均成功的新文件消耗一次额度，预存命中、重复请求和失败不消耗。并发防穿透使用固定 `5m` 且不续租的 pending reservation，pending/succeeded 复用同一 opaque `transferAttemptId` 并幂等完成。失败或预存命中立即删除 pending，进程崩溃后最多保留 5 分钟；pending 已过期但外部转存晚到成功时仍补记一次 succeeded，记录固定诊断码且不删除文件、不污染账号健康。succeeded 提交使用独立 `2s` 总预算有限重试，只有记账成功才继续 `302`；最终失败时保留文件和 pending、本次公共 fallback，不建立数据库补偿或从 transfer 历史重建 Redis。
@@ -50,12 +50,12 @@
 ### 1.2 Emby fallback 边界
 
 - source 路径映射使用独立非敏感加载边界：只读取唯一启用的管理员全局 source 的 `embyPathPrefix/sourceRootId`，不检查 Provider 的 `active/error/cooling_down`、不读取 Provider UID、不解密 Cookie 或申请半开探测；管理员手工停用 source、没有唯一启用记录或位置非法时直接回退 Emby，真正访问 115 仍走严格凭证加载器并复核 source 位置。
-- DirectPlay 返回取消/deadline 或 request context 已终止时返回 `499/504`，不发起 Emby fallback。
+- DirectPlay 返回取消/deadline 或 request context 已终止时返回 `499/504`，不发起 Emby fallback。已进入代理后，上游传输返回包装后的 `context.Canceled` 则返回空体 `499`，普通请求只记 Debug 取消信息，视频保留单条 Info `playback_canceled`，不误记上游故障。
 - 其他 DirectPlay 不适用或失败场景直接代理权威 Emby 请求；Gateway 不读取媒体文件，也不自行实现 Range、缓存或传输编码语义。
 
 继承显式起播意图的内部媒体证明，在视频准入阶段使用其记录的原客户端会话建立 115 租约；后续客户端事件无需会话翻译，原样转发 Emby 后更新相同租约。媒体证明仍按补查会话验证，日志以 `playback_lease_session_bound` 关联原会话与 proof 的脱敏引用。此修复解决收到事件却找不到对应租约的问题，不证明客户端为何出现上报空档；超过 reservation/active/paused 原 TTL 的租约仍不复活。升级前已使用内部会话建立的旧租约不会被迁移，应停止并重新起播建立新租约。
 
-媒体证明过期后，新的内部补查可以继续关联原播放会话：proof 缓存同一锁下保存最多 4096 条身份/媒体匹配记录，只有成功准入的有效视频证明才能建立。初始窗口为 reservation 的 30 秒；真实事件转发成功且租约更新命中后，按 active 2 分钟或 paused 15 分钟更新窗口。视频读取和缓存命中不延长该活动窗口，Stopped、租约缺失、更新的客户端证明或过期会清除关联；晚到的旧候选不能恢复停止关联。新 proof 仍须独立满足媒体合同，只继承会话身份，绝不重新授予或延长 30 秒转存许可。多个候选会话或媒体身份不一致时不猜测匹配。关联不写数据库或 Redis，进程重启后需重新建立。
+媒体证明过期后，新的内部补查可以继续关联原播放会话：proof 缓存同一锁下保存全局最多 4096 条、每个 mapping 最多 64 条身份/媒体匹配记录，满载优先淘汰同 mapping 最旧关联并接纳新记录，只有成功准入的有效视频证明才能建立。初始窗口为 reservation 的 30 秒；真实事件转发成功且租约更新命中后，按 active 2 分钟或 paused 15 分钟更新窗口。视频读取和缓存命中不延长该活动窗口，Stopped、租约缺失、更新的客户端证明或过期会清除关联；晚到的旧候选不能恢复停止关联。新 proof 仍须独立满足媒体合同，只继承会话身份，绝不重新授予或延长 30 秒转存许可。多个候选会话或媒体身份不一致时不猜测匹配。关联不写数据库或 Redis，进程重启后需重新建立。
 
 ### 1.3 新增转存起播许可
 
@@ -65,7 +65,7 @@ DirectPlay 先保留现有缓存/目标查重行为；内容锁内再次确认�
 
 成功 Stopped 清对应身份/条目/session 的许可，缺少 MediaSourceId 时覆盖该 session 的全部 source；清理不依赖 Redis 租约是否存在。普通 proof、十分钟跨 session 媒体缓存和下载地址缓存保留。许可有效期不续期，TTL 内失败可重试；准入后已经开始的转存不因随后停止或过期回滚。未携明确起播字段的客户端首次目标缺失时回退 Emby，其他播放器兼容性仍需单独验证。
 
-按需 PlaybackInfo 的内部 GET 与客户端响应观察共用 proof 缓存锁和有界请求期令牌。内部 owner 的缓存复查/登记及最终检查/整 item 替换均原子完成，内部发布只废弃同 item 其他内部结果，不撤销正在读取 body 的客户端观察。客户端响应入口使同 item 的旧 proof/两类旧令牌失效并登记自身，终态在自身令牌仍有效时发布成功或空快照；旧内部 GET 不能覆盖新起播许可，旧客户端失败收尾也不能清掉较新快照。不影响无关 item，过时内部结果不借用新许可；实际 owner/响应观察结束后清理令牌，不增加数据库或持久缓存。
+按需 PlaybackInfo 的内部 GET 与客户端响应观察共用 proof 缓存锁和有界请求期令牌。内部 owner 的缓存复查/登记及最终检查/发布均原子完成；内部发布只替换同 mapping/item/device 的整 item 快照并废弃同设备其他内部结果，其他设备可独立完成，不撤销正在读取 body 的客户端观察。客户端响应入口使同 item 的旧 proof/两类旧令牌失效并登记自身，终态在自身令牌仍有效时发布成功或空快照；旧内部 GET 不能覆盖新起播许可，旧客户端失败收尾也不能清掉较新快照。不影响无关 item，过时内部结果不借用新许可；实际 owner/响应观察结束后清理令牌，不增加数据库或持久缓存。
 
 2026-09-22 用户确认当前部署只有 STRM 中的本地路径，没有对应媒体挂载，接受未明确起播的详情探测回退 404。STRM 存在不代表 Emby 可读其目标；这类部署中真正播放的 115 链路失败时也没有 Emby 视频源兜底。该部署取舍不改变 Gateway 透明返回真实状态的合同。同日用户随后反馈正常播放没有问题，确认当前客户端实际可播放；首次新转存、停止后重播等场景尚未逐项取证。
 
@@ -223,11 +223,11 @@ stateDiagram-v2
     cooling_down --> pending: 替换 Cookie
 ```
 
-`enabled` 是独立布尔轴：`active` 不等于已启用。显式验证或播放调用确认 Cookie 失效时会进入 `expired + disabled`；显式验证的网络/协议错误进入 `error` 并保留 enabled。播放期间临时 Provider 故障进入默认 1 分钟 `cooling_down`，限流 / 风控分别默认 15 秒 / 30 秒；未到期时不读取 Cookie；到期后 PostgreSQL 行锁只发放一个 1 分钟半开探测租约，成功恢复 `active`，失败按错误类型重新冷却。播放协议错误进入 `error`。路由和目录保存使用独立 `config_version`，健康成功不再使其他请求的配置快照失效；Cookie、显式验证、启停、目录/并发和解绑会推进配置版本。运行期回写同时匹配加载凭证时的 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的结果。
+`enabled` 是独立布尔轴：`active` 不等于已启用。显式验证或播放调用确认 Cookie 失效时会进入 `expired + disabled`；显式验证的网络/协议错误进入 `error` 并保留 enabled。播放期间临时 Provider 故障进入默认 1 分钟 `cooling_down`，限流 / 风控分别默认 15 秒 / 30 秒；未到期时不读取 Cookie；到期后 PostgreSQL 行锁只发放一个 1 分钟半开探测租约，成功恢复 `active`，失败按错误类型重新冷却。播放中的账号级协议错误回写进入 `error`；已识别文件失败按 §7.2 隔离。路由和目录保存使用独立 `config_version`，健康成功不再使其他请求的配置快照失效；Cookie、显式验证、启停、目录/并发和解绑会推进配置版本。运行期回写同时匹配加载凭证时的 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的结果。
 
 source 的路径解析及媒体身份校验成功，即构成真实源健康观察。后续目标查询、起播许可、配额或存储拒绝不应让 source 继续停在半开冷却；源健康在本次源调用结束后独立结算，若后续源 preID/challenge 明确凭证失效或 Provider 临时不可用则不报告成功；业务拒绝、Range 协议不匹配和无效 hash 按文件请求隔离，不把整个源账号置为 error，任务失败落库异常也不能掩盖源失败。继续使用原凭证快照 CAS，较新的故障、停用和 Cookie 替换不能被旧成功覆盖。playback 仍以真实下载接口成功作为恢复证据。
 
-DirectPlay 对源路径查询设置 30 秒只读预算，与 Adapter 目录 flight / 分页上限对齐；每次 preID/challenge 源片段读取最多 10 秒，源取链（含本地数据面排队）和实际 Range 各有独立 5 秒窗口。Range 的窗口覆盖 DNS、TCP/TLS、响应头与完整有界 body 读取；取链阶段不再消耗它的窗口。各阶段仍受调用方更早 deadline 与整次加速 2 分钟总 deadline 约束。超预算主动取消并以 `source_read_timeout` 回退，Adapter 的局部超时保留可用的 `download_url/source_range` 失败阶段，大目录/范围读取超时不写账号故障，未开始的秒传不再执行；已开始的 retained 写入不受这一只读预算中断。客户端取消本身不写账号故障；没有有效源身份时也不伪造恢复成功，既有半开探测租约保留原到期规则。该预算不限制 Emby 回退耗时，客户端实际起播仍需线上验证。
+DirectPlay 对源路径查询设置 30 秒只读预算，与 Adapter 目录 flight / 分页上限对齐；每次 preID/challenge 的源取链（含本地数据面排队）和实际 Range 各有独立 5 秒窗口；名义预算之和为 10 秒，Service 和 Adapter 不再叠加会抢先覆盖阶段信息的 10 秒总定时器。Range 的窗口覆盖 DNS、TCP/TLS、响应头与完整有界 body 读取；取链阶段不再消耗它的窗口。各阶段仍受调用方更早 deadline 与整次加速 2 分钟总 deadline 约束。超预算主动取消并以 `source_read_timeout` 回退，Adapter 的局部超时保留可用的 `download_url/source_range` 失败阶段，大目录/范围读取超时不写账号故障，未开始的秒传不再执行；已开始的 retained 写入不受这一只读预算中断。客户端取消本身不写账号故障；没有有效源身份时也不伪造恢复成功，既有半开探测租约保留原到期规则。该预算不限制 Emby 回退耗时，客户端实际起播仍需线上验证。
 
 持续健康账号复用凭证读取快照，对 1 分钟内的干净成功跳过健康 SQL；错误、恢复和配置修改后的首次成功仍立即尝试条件写入。采样观察不会推进健康版本或清除新错误。保留文件复用的访问时间使用单条条件 UPDATE，先确定最近 succeeded 任务，再按 1 分钟窗口更新；旧请求不回退时间，窗口内及外部预存文件均允许零行更新。这两个时间是观察采样，不是逐次播放审计或活跃会话真相。
 
@@ -243,7 +243,7 @@ DirectPlay 对源路径查询设置 30 秒只读预算，与 Adapter 目录 flig
 4. 启用接口在行锁内复验 active、凭证、Provider UID、目录、并发和当前套餐；套餐降低不改写已保存配置，运行时计算较小有效值。
 5. `DELETE` 不物理删除账号，而是写入不可复活的 revoked tombstone，清空 owner/凭证/Provider/目录/并发/健康字段并保留账号 ID 供 transfer 外键引用。用户删除顺序为 Token 撤销 → tombstone → Emby 删除 → Ember 用户删除。
 
-解绑不删除 Redis 租约：已签发 CDN URL 仍可能播放，现有 reservation/active/paused 由成功 Stopped 或 TTL 收口。同一 Provider UID 重新绑定时会生成相同 HMAC account key 并继续受旧占用限制。
+解绑及删除用户的 tombstone 提交成功后，才以事务锁定记录的旧 Provider UID 通知本进程数据面限流器；失败、回滚或重复解绑不误清理。无人等待且余额回满时回收桶，未回满或仍有等待者则保留原余额/FIFO，防止重绑刷新突发额度；旧回调不能修改新桶。API/Gateway 分进程时，各自依靠空闲回满回收，不新增跨进程通知。解绑不删除 Redis 租约：已签发 CDN URL 仍可能播放，现有 reservation/active/paused 由成功 Stopped 或 TTL 收口。同一 Provider UID 重新绑定时会生成相同 HMAC account key 并继续受旧占用限制。
 
 ## 4. Emby 登录与 Token 映射
 
@@ -300,9 +300,9 @@ mappingId + itemId + mediaSourceId -> container
 
 plain stream 带唯一 MediaSourceId 和 `Static=true`、但没有 PlaySessionId 时：
 
-1. 先复用同一 mapping/item/source 最新、未过期的 PlaybackInfo 证明，并再次核对当前 server/user/Emby user/device 身份；身份变化时不得复用旧 PlaySessionId。
+1. 先筛选同一 mapping/item/source 且完整 Principal 身份匹配的未过期证明，再选本设备最新记录；其他设备的新证明不能遮蔽本设备仍有效的证明，身份变化时不得复用旧 PlaySessionId。
 2. 未命中时使用当前用户 Token 请求内部 Emby `GET /Items/{Id}/PlaybackInfo?UserId=...`；不使用管理员 API Key，Token 不进入 URL。
-3. 相同 key 的并发请求 singleflight 合并；调用固定 10 秒超时，等待方可独立取消。
+3. singleflight 键为 mapping/item/mediaSource/device/Token-SHA256，键中不保留明文 Token，也不输出键；相同键才合并请求。调用固定 10 秒超时，等待方可独立取消。
 4. 成功响应必须匹配 item/source 并提供 PlaySessionId/Container；合格 DirectPlay source 写入原证明缓存。
 5. 分别准备两份请求：追加缺失参数的 115 决策请求，以及严格验证 `DirectStreamUrl` 后形成的正常 Emby fallback 请求。
 6. DirectStreamUrl 缺失或无效时，正常 fallback 使用 Emby 官方 Web 的 `/Videos/{Id}/stream.{Container}`；只有扩展名也无法安全形成时才使用补齐后的 plain stream。
@@ -336,7 +336,7 @@ sequenceDiagram
 mappingId + itemId + mediaSourceId + playSessionId
 ```
 
-缓存包含 Principal 身份、`Path/Container`、Emby Size 观察值和 Direct Play 能力，TTL 5 分钟、最多 4096 条、仅当前 Gateway 进程可见。Emby Size 不参与 proof 或路径解析；进程重启、证明缺失/过期/错配只会失去 115 加速，合法请求仍 fallback Emby。
+缓存包含 Principal 身份、`Path/Container`、Emby Size 观察值和 Direct Play 能力，TTL 5 分钟、全局最多 4096 条、每个 mapping 最多 64 条，仅当前 Gateway 进程可见。证明、独立起播许可、播放关联分别使用相同容量规则：优先淘汰当前 mapping 最旧记录；新 mapping 在全局满载时才淘汰全局最旧记录，相同时间按写入顺序处理。许可/关联满载不直接拒绝新记录；在途发布令牌仍沿用请求期容量保护，不能为腾位删除仍运行的 owner。Emby Size 不参与 proof 或路径解析；进程重启、证明缺失/过期/错配只会失去 115 加速，合法请求仍 fallback Emby。
 
 ## 6. 视频请求决策
 
@@ -480,7 +480,7 @@ sequenceDiagram
     end
 ```
 
-任一 Provider 调用返回账号级类型化错误时，DirectPlay 只把实际调用账号和固定 `credential_rejected/provider_unavailable/provider_protocol` 结果交给 `P115AccountService`；请求取消、目标文件不可见、下载 Header 不兼容和其他文件级失败不污染账号健康。健康回写使用独立 2 秒上限，失败或旧结果被拒绝都不替换原始 DirectPlay 错误、302 或 Gateway fallback。
+任一 Provider 调用返回账号级类型化错误时，DirectPlay 只把实际调用账号和固定 `credential_rejected/provider_unavailable/provider_rate_limited/provider_risk_control/provider_protocol` 失败结果交给 `P115AccountService`；请求取消、目标文件不可见、下载 Header 不兼容和其他文件级失败不污染账号健康。健康回写使用独立 2 秒上限，失败或旧结果被拒绝都不替换原始 DirectPlay 错误、302 或 Gateway fallback。
 
 ### 7.1 Transfer task 状态
 
@@ -501,6 +501,14 @@ stateDiagram-v2
 如果第一次查重直接命中外部预存文件，可以不创建 task；`preexisting=true` 仍允许播放。第一阶段所有 playback 文件都保留，Playing/Stopped/TTL 不调用 `DeleteFile`。
 
 转存配额只在 advisory lock 内第二次查重仍缺失、且实时新增转存许可通过后申请。pending 固定 `5m` 且不续租；Provider 或目标复核失败尽力立即释放。目标复核成功后，同一 opaque attempt 必须先幂等写入 succeeded 才能继续下载 URL/302；pending 已过期仍补记并记录 `transfer_pending_expired_before_commit`。独立 `2s` 预算耗尽时记录 `transfer_quota_commit_failed`，保留 Provider 文件和仍存在的 pending、标记 task 失败并 fallback，不污染账号健康。
+
+### 7.2 文件级失败与账号健康
+
+单一且 pickCode 匹配的 downurl 条目返回 `url=false/null/缺失/空`，以及已识别的 `70005/231011/50003/50015`，映射为 `ErrFileUnavailable`；过期直链与空/过期/负并发候选同样按 `file_unavailable` fallback，不回写账号故障。`99/990001` 才按已列出的兼容表判为凭证失效；这些 errno 依据公开实现，**未经真实账号证实**。未知 errno 保持 `ErrProviderRejected`，不推断限流或风控。
+
+Service 的秒传业务结果拒绝、目标复核不符、无效/重复 challenge 或查重候选不符只失败当前文件/任务；后两类仍可能使用 `provider_protocol` 作为 fallback 原因，但没有账号 `provider_protocol` 回写。真正返回的 `ErrProviderRejected/ErrProviderProtocol` 则按操作分类：源路径与源 preID/challenge 隔离，其他 playback 操作保留既有账号 `error` 语义，不能写成所有协议错误都被忽略。
+
+downurl 和通用 GET 的响应体读取中断在调用方 context 有效时是 `ErrProviderUnavailable`，沿用 1 分钟冷却；context 取消/deadline 保留原错误。HTTP `429` 保留默认 15 秒限流冷却，裸 HTTP `403` 保留 1 分钟临时不可用冷却，不把它们与未知专有业务码混为一谈。完整映射见 [Cookie 合同 §5.5.1](./p115-cookie-playback-contract.md#551-downurl-文件失败与-errno未经真实账号证实) 和 [运行期失败分类](./p115-cookie-playback-contract.md#102-运行期失败分类)。
 
 ## 8. 302、fallback 与日志
 
@@ -539,6 +547,10 @@ stateDiagram-v2
 
 排查 preID/challenge 耗时时，Debug `source_range_completed` 的 `sourceDownloadMs` 是源取链阶段（含排队），`rangeReadMs` 是实际 CDN 请求与读取阶段，`durationMs` 是整次 Hash 读取。`provider_operation_completed stage=download_url` 与 `stage=source_range` 各自记录本次 HTTP trace，CDN 的 TLS/首字节字段不会继承源取链回调。取链失败时 `rangeReadMs=0` 且没有 CDN 请求；仅凭相邻日志不能建立并发请求的归属。上述时间已经包含在 Gateway 最终 `preIDMs/challengeMs` 内，不能与它们重复相加。
 
+秒传初始化另有 `provider_operation_completed stage=rapid_upload`，只描述实际上传 POST 的 trace；上传信息 GET 仍是独立 `cookie_get`。失败阶段与脱敏协议证据沿原链路传递，不能把整次 `rapidUploadMs` 与这些 HTTP 明细重复相加。
+
+上游代理取消时，视频最终记录使用 Info `code=playback_canceled result=canceled statusCode=499 proxyErrorCode=request_canceled`，保留原有 decision/stage/reasonCode，不把取消写成上游故障或回退成功。普通代理请求的取消只记 Debug `upstream_request_canceled`。这不改变 DirectPlay 在代理前因取消/deadline 直接终止的边界。
+
 每个固定视频请求在默认 Info 只打印一条播放决策；设置中心数据库项 `LOG_LEVEL=debug` 时额外打印入口、过程与统一的 `request_completed` 请求摘要，API 保存后由 Gateway 最多在 5 秒内从进程缓存刷新生效：
 
 - `requestId` 是 Gateway 进程随机前缀与原子序号生成的请求标识，不采信客户端 Header；贯穿视频入口、DirectPlay 阶段、回退、最终决策与请求完成。`sessionRef` 是带进程随机种子的 Server/用户/映射/设备/PlaySessionId 摘要，关联视频与播放事件；缺失身份为 `unavailable`，进程重启后不可关联，不使用原始会话或 Redis Key。
@@ -555,7 +567,7 @@ level=info|warn code=direct_play_fallback message="无起播许可，跳过新�
 level=warn code=playback_rejected message="播放请求已拒绝" result=rejected
 ```
 
-三类日志继续保留 `decision=redirect|fallback|reject`、固定 `stage/reasonCode` 和必要请求标识，便于机器检索。直链成功时 `targetState=created|reused` 明确区分首次转存与已有文件复用；DirectPlay 失败时仅允许记录固定 `providerOperation=resolve_source_path|hash_source_preid|rapid_upload|hash_source_challenge|rapid_upload_retry|verify_playback_target|search_playback_target|get_download_url`，账号加载失败只记录 `accountRole=source|playback`。这些字段来自内部类型化诊断，不接受 Provider 原始错误。
+上述结果及取消记录继续保留 `decision=redirect|fallback|reject`、固定 `stage/reasonCode` 和必要请求标识，便于机器检索。直链成功时 `targetState=created|reused` 明确区分首次转存与已有文件复用；DirectPlay 失败时仅允许记录固定 `providerOperation=resolve_source_path|hash_source_preid|rapid_upload|hash_source_challenge|rapid_upload_retry|verify_playback_target|search_playback_target|get_download_url`，账号加载失败只记录 `accountRole=source|playback`。这些字段来自内部类型化诊断，不接受 Provider 原始错误。
 
 缺少起播许可仅标记新增转存 skipped，不表述为 Provider 故障；最终 `fallbackResult/statusCode/upstreamStatus` 和 info/warn 仍反映真实上游响应，不统一隐藏 404 或连接错误。
 
@@ -593,6 +605,8 @@ Debug 请求摘要记录有界 method/Host/原始 request path、query key、rou
 | Gateway/Infuse | 2026-08-23 已确认登录/普通资源 `200` 与按需 PlaybackInfo `proofCount=1`。2026-08-29 Infuse `8.5.2` 的 `Size=0` 条目确认 `proofAccepted=true`、source 路径映射、Provider Size 转存成功，并由 Gateway 首次及多次复用返回 `302`。2026-08-31 macOS Infuse `8.5.2` 进一步确认 `path_not_mapped` 条目经权威 Emby 扩展名 fallback 返回 `206` 并实际播放，115 首次/复用 `302` 可播放，外挂/内嵌字幕及 Playing/Progress/Stopped `204` 均正常 | 115 CDN 完整响应头/Range/全文件字节、UA/IP 绑定和长期 Provider 风控；生产未故障注入 `providerOperation/accountRole`，只保留 fake 测试证据 |
 
 自动化测试不得请求真实 Emby/115。真实验证必须使用测试账号/文件并取得明确授权，不能把 fake、数据库或一次性 Provider 检查表述为 Infuse 已可用。
+
+2026-10-17 二轮修复的自动化证据：`080be97`（A）、`da4d64a`（B）、`d3f6fed`（C）对应工作区均通过 API `go vet ./...`、`go test ./...`、`go build ./...`；B 的 Gateway、C 的 Provider/账号/DirectPlay/Gateway 另有 race 验证。新增 fake/SQL mock 覆盖文件错误与健康隔离、errno、断连后停止释放、设备与凭证合并键、每 mapping 配额及淘汰、假时钟阶段预算、取消日志、秒传观测、UID 桶与提交后清理。该批验证未启用真实 PostgreSQL 集成，也未请求真实 Emby/115/Redis 或播放器，不能并入历史真实验收结论。
 
 ## 11. 系统性审查结论
 
@@ -640,10 +654,10 @@ Debug 请求摘要记录有界 method/Host/原始 request path、query key、rou
 
 #### 【P2-1，已关闭】播放运行期已回写账号失效、冷却和成功状态
 
-- 关闭实现：`directplay.Service` 通过窄 `AccountHealthReporter` 只回传实际调用账号和六种固定结果；成功按 1 分钟采样更新 source/playback `lastSucceededAt`（首次及恢复立即写入），凭证失效进入 `expired + disabled`，临时不可用进入 1 分钟 `cooling_down`，真实 115 `429` 短暂限流冷却，风控哨兵保留但裸 HTTP `403` 按临时不可用处理，协议错误进入 `error`。本地 `MaxWait` 拒绝（入队估计或实际排队到期）不回写健康。
+- 关闭实现：`directplay.Service` 通过窄 `AccountHealthReporter` 只回传实际调用账号和六种固定结果；成功按 1 分钟采样更新 source/playback `lastSucceededAt`（首次及恢复立即写入），凭证失效进入 `expired + disabled`，临时不可用进入 1 分钟 `cooling_down`，HTTP `429` 默认 15 秒限流冷却，风控哨兵保留但裸 HTTP `403` 按 1 分钟临时不可用处理，账号级协议错误回写进入 `error`。本地 `MaxWait` 拒绝（入队估计或实际排队到期）不回写健康。
 - 并发边界：冷却期间不读取 Cookie；到期后 `AcquireRuntimeByRole` 在 PostgreSQL 行锁内续租并只放行一个半开探测。回写同时匹配 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖 Cookie 替换、显式验证、手工启停或更新后的健康结果。
-- 失败边界：请求取消和文件级错误不改变账号状态；源路径解析的业务拒绝、响应协议异常和无效文件身份也属于请求级失败，不把源账号置为 `error`。明确凭证失效/临时不可用和其他 Provider 操作的健康处理保持原合同。健康回写使用独立 2 秒上限，失败不改写原始 302/fallback 结果。
-- 验证证据：Go 单元/race 与独立 PostgreSQL schema 已覆盖四类映射、冷却阻断、过期冷却并发单探测、成功恢复、凭证失效停用和旧 Cookie 结果丢弃；没有请求真实 115，生产自然故障的冷却时长仍待观察。
+- 失败边界：2026-10-17 已将识别到的文件不可用/过期下载候选、秒传业务结果拒绝、目标不符与文件级 challenge/候选校验从账号故障中隔离；详情及仍保留的协议错误语义见 §7.2。请求取消、本地预算和 MaxWait 超限不写故障；源路径及源 preID/challenge 的业务/协议失败也不把源账号置为 `error`。downurl/通用 GET 读取中断且 context 有效时仍进入 1 分钟临时冷却；明确凭证失效、HTTP `429` 与裸 `403` 按原合同处理。fallback 的 `provider_protocol` 原因不等于账号已被写为 `error`。健康回写使用独立 2 秒上限，失败不改写原始 302/fallback 结果。
+- 验证证据：既有 Go/独立 PostgreSQL schema 证据覆盖历史四类映射、冷却阻断、半开单探测、成功恢复、凭证停用及旧 Cookie 结果丢弃。2026-10-17 新增分类、预算、租约、缓存与清理修复由上述 fake/race/SQL mock 验证，不代表这批改动已实测 PostgreSQL 或真实 115；生产自然故障的冷却时长仍待观察。
 
 #### 【P2-2，自动化已关闭】用户自有账号路由与 Redis 活跃/转存配额
 
@@ -678,6 +692,6 @@ Debug 请求摘要记录有界 method/Host/原始 request path、query key、rou
 
 ## 12. 建议的后续顺序
 
-1. 在设置 `EMBER_INTEGRATION_DATABASE_URL` 的专用库执行新增 migration 幂等/约束用例。
+1. 需要数据库复验时，在专用 `EMBER_INTEGRATION_DATABASE_URL` 隔离库重跑既有 migration/约束及相关生命周期用例；A–C 没有新增 schema，tombstone 提交后 UID 清理的 SQL mock 不能代替真实 PostgreSQL 验证。
 2. 用户明确授权后，再验证个人 Cookie 固定 UA、单 Gateway Redis 断连/恢复、HEAD/Playing/Progress/Stopped 与 `5/10` 配额边界；日志不得携带凭证、UID、session、Redis Key 或 attempt ID。
 3. 独立推进 115 CDN 完整响应合同、保留文件容量治理和主动账号健康告警；不得把这些后续项塞回当前 Redis 配额状态机。

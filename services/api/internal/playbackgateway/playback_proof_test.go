@@ -118,15 +118,17 @@ func TestPlaybackProofCacheFindsLatestMediaSourceWithoutSessionKey(t *testing.T)
 	cache.Record([]PlaybackProof{fixturePlaybackProof("mapping-1", "item-1", "source-1", "session-1")})
 	now = now.Add(time.Second)
 	cache.Record([]PlaybackProof{fixturePlaybackProof("mapping-1", "item-1", "source-1", "session-2")})
-	proof, ok := cache.LookupLatestMediaSource("mapping-1", "item-1", "source-1")
+	proof, ok := cache.LookupLatestMediaSource(fixturePrincipal(), "item-1", "source-1")
 	if !ok || proof.PlaySessionID != "session-2" {
 		t.Fatalf("latest proof=(%+v,%t)", proof, ok)
 	}
-	if _, ok := cache.LookupLatestMediaSource("mapping-2", "item-1", "source-1"); ok {
+	otherPrincipal := fixturePrincipal()
+	otherPrincipal.MappingID = "mapping-2"
+	if _, ok := cache.LookupLatestMediaSource(otherPrincipal, "item-1", "source-1"); ok {
 		t.Fatal("latest lookup crossed mapping identity")
 	}
 	now = now.Add(time.Minute)
-	if _, ok := cache.LookupLatestMediaSource("mapping-1", "item-1", "source-1"); ok {
+	if _, ok := cache.LookupLatestMediaSource(fixturePrincipal(), "item-1", "source-1"); ok {
 		t.Fatal("expired latest proof remained available")
 	}
 }

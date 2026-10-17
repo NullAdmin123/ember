@@ -7,6 +7,7 @@ import (
 	"compress/zlib"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -1754,6 +1755,36 @@ func TestGatewayUpstreamFailureIsSanitized(t *testing.T) {
 		t.Fatalf("logs = %q", logs.String())
 	}
 	assertSecretsAbsent(t, logs.String(), fixtureAccessToken, fixturePassword, "upstream.invalid")
+}
+
+// TestGatewayCanceledUpstreamIsNotAnOutage covers wrapped transport
+// cancellation for ordinary requests and the video fallback decision path.
+func TestGatewayCanceledUpstreamIsNotAnOutage(t *testing.T) {
+	for _, video := range []bool{false, true} {
+		t.Run(fmt.Sprintf("video=%t", video), func(t *testing.T) {
+			var logs bytes.Buffer
+			gateway := newVideoTestGateway(t, "http://emby.invalid", &fakeTokenService{principal: fixturePrincipal()}, nil, roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, fmt.Errorf("fixture transport: %w", context.Canceled)
+			}), &logs)
+			path := "/Items/item-1"
+			if video {
+				path = "/Videos/item-1/stream.mkv?MediaSourceId=source-1&PlaySessionId=session-1&Static=true"
+			}
+			response := httptest.NewRecorder()
+			gateway.ServeHTTP(response, newVideoRequest(http.MethodGet, path))
+			if response.Code != statusClientClosedRequest || response.Body.Len() != 0 {
+				t.Fatalf("status=%d bodyBytes=%d", response.Code, response.Body.Len())
+			}
+			for _, unwanted := range []string{"level=error", "level=warn", "code=upstream_unavailable", "proxyErrorCode=upstream_unavailable"} {
+				if strings.Contains(logs.String(), unwanted) {
+					t.Fatalf("cancellation logged as outage: %s", unwanted)
+				}
+			}
+			if video && strings.Count(logs.String(), "decision=") != 1 {
+				t.Fatal("canceled video lost its single final decision")
+			}
+		})
+	}
 }
 
 func TestGatewayPublicBootstrapUsesApplicationHeaderWithoutTokenMapping(t *testing.T) {

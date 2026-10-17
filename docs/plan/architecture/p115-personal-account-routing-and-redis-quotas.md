@@ -2,7 +2,7 @@
 
 > 状态：阶段 0–3 已落地，基础及后续 DirectPlay PostgreSQL 专项已完成；受控真实外部验收待完成
 > 负责人：Ember
-> 更新时间：2026-09-21（补跑 DirectPlay PostgreSQL 专项）
+> 更新时间：2026-10-17（同步停止释放与 tombstone 限流清理；历史 PostgreSQL 证据不外推）
 
 ## 背景
 
@@ -249,7 +249,7 @@ Redis 官方合同依据：Lua 脚本在服务端原子执行，并允许跨多�
 - `Playing`：把已有 `reservation|paused` 晋级/恢复为 `active`，或续租已有 `active`；同时写入 account/user `active` 索引并使用固定 `2m` active TTL。
 - `Progress + IsPaused=false`：把已有 `reservation|paused` 晋级/恢复为 `active`，或续租已有 `active`，并刷新固定 `2m` active TTL。
 - `Progress + IsPaused=true`：把已有 `reservation|active` 晋级/切换为 `paused`，继续计入 `leases` 与 `active`，并刷新固定 `15m` paused TTL；暂停不能按 `Stopped` 删除。
-- `Stopped`：只有请求成功转发给 Emby 后，才同时删除 account/user `leases`、`active` 和反向 session。
+- `Stopped`：只有请求成功转发给 Emby 后，才同时删除 account/user `leases`、`active` 和反向 session。该成功事件更新使用保留上下文值的 `WithoutCancel + 2s timeout`；之后客户端取消不阻止释放，未成功转发不伪造成功或删除租约。
 - 找不到反向 session 的 Playing/Progress/Stopped 不创建或猜测 playback 账号租约，只记录固定观察结果；无后续事件时，member 先按 score 不再计入有效占用，索引 Key 最迟按 `16m` 物理 TTL 删除，不依赖数据库 cron。
 
 首期业务 TTL 固定为 `reservation=30s`、`active=2m`、`paused=15m`，并作为单 Gateway 进程中的同一套代码常量；不增加环境变量或后台配置。这些是保守初值，不扩写为已由真实客户端证明的最优值；后续只有取得目标客户端的请求与事件间隔证据后才能修改，并同步测试和稳定文档。reservation 只承担 302 签发前后的并发防穿透，不展示为正在播放；暂停期间继续占用一路，避免恢复旧连接时突破账号上限。
@@ -328,6 +328,8 @@ Redis 官方合同依据：Lua 脚本在服务端原子执行，并允许跨多�
 目录接口只允许当前账号已显式验证为 `active`，并接收用户输入的已有目录路径；使用本人当前加密凭证调用 `ResolveDirectoryByPath`，成功后在同一次更新中保存规范化 `targetParentPath` 快照和唯一 `targetParentId`。禁止只保存 path、使用根目录兜底、自动创建目录或返回 Provider 原始目录响应。
 
 `PUT /api/v1/user/p115-account/enabled` 将 `enabled=true` 时必须在行锁内重新检查：账号仍属于当前用户、`status=active`、Cookie 密文与 Provider UID 存在、`targetParentPath/targetParentId` 成对非空、`maxConcurrentStreams` 已配置，且当前有效套餐校验仍通过。缺少或越界返回 `409` 并保持 disabled，不自动补默认目录或并发值；设置 `enabled=false` 不受当前验证状态限制。
+
+个人解绑与删除用户复用同一 tombstone 提交后清理入口：仅使用该事务锁定记录的旧 Provider UID，提交失败或重复解绑不通知限流器。生产 Cookie Adapter 共用本进程 UID 桶，空闲且令牌自然回满时才回收；未回满/仍有等待者保留余额与 FIFO，不能借重绑刷新突发额度，旧回调不能修改新桶。API/Gateway 分进程时各自自然回收，不删除 Redis 租约或增加跨进程通知。2026-10-17 新增 fake/race/SQL mock 已覆盖此边界，尚未执行这批改动的真实 PostgreSQL 或外部验收。
 
 #### 4.3 管理员共享账号
 

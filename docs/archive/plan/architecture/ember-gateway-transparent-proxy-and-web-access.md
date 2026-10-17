@@ -4,6 +4,8 @@
 > 负责人：Ember
 > 更新时间：2026-08-31
 
+本文保留截至 2026-08-31 的实现与验收记录。后续 115 二轮修复已扩展设备/Token 摘要合并键、mapping 容量隔离和代理取消日志；现行规则以 [播放代理合同](../../../reference/emby-playback-proxy-contract.md) 与 [115 端到端参考](../../../reference/p115-playback-end-to-end-flow.md) 为准，不把本文历史验证扩大为新行为已实机通过。
+
 ## 背景
 
 `ember-gateway` 已经具备 Emby 登录响应观察、AccessToken 映射、本地用户资格门控、PlaybackInfo 证明、115 直连决策和 Emby 视频回退能力。但当前路由合同仍围绕 `/emby/...` 特定路径设计，没有完整承担“客户端访问 Emby 的唯一公网入口”职责。

@@ -153,7 +153,8 @@ func TestCookieHTTPAdapterGetDownloadURLRejectsUnsafeURLs(t *testing.T) {
 		{name: "duplicate expiry", url: "https://cdnfhnfile.115.com/video.mkv?t=1700003600&t=1700007200&c=0&f=1", wantErr: ErrProviderProtocol},
 		{name: "expired", url: "https://cdnfhnfile.115.com/video.mkv?t=1700000000&c=0&f=1", wantErr: ErrDownloadURLExpired},
 		{name: "missing concurrency", url: "https://cdnfhnfile.115.com/video.mkv?t=1700003600&f=1", wantErr: ErrProviderProtocol},
-		{name: "invalid concurrency", url: "https://cdnfhnfile.115.com/video.mkv?t=1700003600&c=-1&f=1", wantErr: ErrProviderProtocol},
+		{name: "negative concurrency", url: "https://cdnfhnfile.115.com/video.mkv?t=1700003600&c=-1&f=1", wantErr: ErrFileUnavailable},
+		{name: "invalid concurrency", url: "https://cdnfhnfile.115.com/video.mkv?t=1700003600&c=invalid&f=1", wantErr: ErrProviderProtocol},
 		{name: "missing header flag", url: "https://cdnfhnfile.115.com/video.mkv?t=1700003600&c=0", wantErr: ErrProviderProtocol},
 		{name: "unknown header flag", url: "https://cdnfhnfile.115.com/video.mkv?t=1700003600&c=0&f=2", wantErr: ErrDownloadURLIncompatible},
 	}
@@ -234,7 +235,7 @@ func TestCookieHTTPAdapterGetDownloadURLMapsSafeProviderFailures(t *testing.T) {
 		}, wantErr: ErrProviderProtocol},
 		{name: "directory", statusCode: http.StatusOK, body: `{"state":true,"data":"encrypted-response"}`, decrypt: func(string) ([]byte, error) {
 			return []byte(`{"789":{"pick_code":"` + fixtureDownloadPickCode + `","url":null}}`), nil
-		}, wantErr: ErrProviderRejected},
+		}, wantErr: ErrFileUnavailable},
 		{name: "response too large", statusCode: http.StatusOK, body: strings.Repeat("x", maxCookieResponseBody+1), wantErr: ErrProviderProtocol},
 	}
 	for _, test := range tests {

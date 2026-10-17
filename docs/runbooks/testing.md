@@ -33,11 +33,13 @@ go build ./cmd/ember
 
 ```bash
 cd services/api
-go test -count=1 ./internal/playbackgateway ./internal/services/directplay ./internal/services/p115account ./internal/services/p115quota
-go test -race -count=1 ./internal/playbackgateway ./internal/services/directplay ./internal/services/p115account ./internal/services/p115quota
+go test -count=1 ./internal/integrations/p115 ./internal/playbackgateway ./internal/services/directplay ./internal/services/p115account ./internal/services/p115quota
+go test -race -count=1 ./internal/integrations/p115 ./internal/playbackgateway ./internal/services/directplay ./internal/services/p115account ./internal/services/p115quota
 ```
 
 专项测试必须覆盖 personal/system 账号路由、Redis reservation/active/paused/Stopped、HEAD 不创建、小时/自然日转存额度、Redis 断连 fallback，以及成功 `302` 不访问 Emby、DirectPlay 失败无损回到 Emby。不得把 fake Redis 替换为真实 Redis、Emby、115 或 CloudDrive2 调用。
+
+2026-10-17 二轮修复 A–C 已分别通过 API 全量 `go vet ./...`、`go test ./...`、`go build ./...`；B 的 Gateway 与 C 的 Provider/账号/DirectPlay/Gateway 定向 race 通过。关键回归包括 `cookie_failure_classification_test.go`、`cookie_download_context_test.go`、`source_range_budget_test.go`、`account_limiter_cleanup_test.go`、`rapid_upload_observation_test.go`，以及 Gateway 的取消/独立租约释放/设备隔离/容量测试和账号 `store_revoke_test.go`。源读取预算使用 `internal/testutil/faketime` 的手动时钟；新时钟方法通过这些上层行为用例覆盖，不靠真实 5 秒等待。tombstone 事务使用 SQL mock；这批验证未启用真实 PostgreSQL，也未执行真实外部或播放器验收，不能外推历史数据库结果。
 
 上述命令只做 fake 上游、生命周期、统一子命令分发和构建验证，不启动 API/Gateway、不请求真实 Emby。默认构建验证不会在工作区生成二进制；需要单独产物时显式使用 `go build -o bin/ember ./cmd/ember`，且禁止提交 `bin/`。
 

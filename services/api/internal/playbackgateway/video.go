@@ -526,6 +526,8 @@ func directPlayReasonCode(err error) string {
 		return "rapid_upload_unavailable"
 	case errors.Is(err, directplay.ErrTargetUnavailable):
 		return "target_unavailable"
+	case errors.Is(err, directplay.ErrFileUnavailable):
+		return "file_unavailable"
 	case errors.Is(err, directplay.ErrDownloadIncompatible):
 		return "download_incompatible"
 	case errors.Is(err, directplay.ErrStoreUnavailable):
@@ -600,6 +602,9 @@ func (gateway *Gateway) logVideoDecision(decision videoDecision) {
 // fallback status and severity still describe the actual upstream response.
 func videoDecisionHeadline(decision videoDecision) []string {
 	fields := []string{"[PlaybackGateway]"}
+	if decision.ProxyErrorCode == "request_canceled" && decision.StatusCode == statusClientClosedRequest {
+		return append(fields, "level=info", "code=playback_canceled", "message="+strconv.Quote("播放请求已取消"), "result=canceled", "statusCode=499")
+	}
 	switch decision.Decision {
 	case "redirect":
 		targetState := "created"

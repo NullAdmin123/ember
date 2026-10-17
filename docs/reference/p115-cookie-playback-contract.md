@@ -44,12 +44,13 @@ OpenAPI 获批后的正式授权、Token 生命周期和官方端点合同见 [1
 
 首期不支持：
 
-- 普通用户绑定自己的 115 账号（已拆入独立后续计划，当前仍不支持）。
 - 二维码登录、自动抓取 Cookie 或 Cookie 自动续期。
 - 多播放账号池、自动选路、主备切换或账号借用。
 - OpenAPI 与 Cookie 的隐式回退。
 - Ember 下载完整视频后再上传。
 - 需要最终播放器额外注入 Cookie、Authorization 等请求头的直链。
+
+普通用户绑定本人 playback 账号不属于首期设计，但现已由后续个人账号计划实现，复用本合同；见 §4.2 与本文开头的个人账号路由计划。它不新增 source 角色或账号池。
 
 ## 3. Provider 边界
 
@@ -79,7 +80,7 @@ OpenAPI 获批后的正式授权、Token 生命周期和官方端点合同见 [1
 - `source`：管理员维护的全局源账号，只用于定位源文件、获取源下载地址和读取指定 Range。
 - `playback`：播放小号，只用于目标查重、秒传落盘和签发最终直链。
 
-数据库对每个角色至多允许一条启用记录；网关进入就绪状态时，必须同时存在一个启用的 `source` 和一个启用的 `playback`。两者不能是同一条账号记录；Provider 返回的账号标识相同时应拒绝启用，避免把源账号误当播放小号。
+管理员全局 source/shared playback 按角色各至多启用一条；个人 playback 按 owner 各至多保留一条非 revoked 记录。尝试 115 加速时必须取得唯一可运行的管理员 source 和本次套餐路由选中的 playback；账号缺失或不可用只使加速 fallback，不改变 Gateway 的普通 Emby 代理能力。两者不能是同一条账号记录或相同 Provider UID；非 revoked 账号之间也不能重复绑定同一 Provider UID。
 
 ### 4.2 Cookie 安全
 
@@ -166,7 +167,7 @@ Ember 的 `CookieHTTPAdapter.GetUploadInfo` 当前固定：
 - 只发送 `GET /app/uploadinfo`，不带 query 和请求体；Header 仅承载固定 `Accept: */*`、账号 Cookie 和账号 User-Agent，不发送 `Authorization`。
 - 只接受 HTTP `2xx`、顶层布尔 `state=true`、顶层十进制 `user_id` 和非空 `userkey`；`user_id` 可为 JSON number 或十进制 string，进入内部合同前规范化为十进制 string。
 - 响应 `user_id` 必须与请求 Cookie 的规范化 `UID` 一致；不一致按凭证拒绝处理，禁止把其他账号的 `userkey` 带入上传初始化。
-- `state=false` 映射为 `ErrProviderRejected`；网络和非 `2xx` 映射为 `ErrProviderUnavailable`；字段缺失、非法 JSON 或超限响应映射为 `ErrProviderProtocol`。
+- `state=false` 映射为 `ErrProviderRejected`；网络、响应体读取中断及一般非 `2xx` 映射为 `ErrProviderUnavailable`，其中 HTTP `429` 单独映射为 `ErrProviderRateLimited`；调用方取消/deadline 保留 context 错误。字段缺失、非法 JSON 或超限响应映射为 `ErrProviderProtocol`。这些 sentinel 是否回写账号健康还取决于运行期操作，见 §10.2。
 - 错误不携带请求 URL、Cookie、`userkey`、响应正文或 Provider 原始错误文本。
 
 证据：[`upload_info_app`](https://github.com/ChenyangGao/p115client/blob/608a44396fea08d36131a68beb245be1fe17aa6d/p115client/client.py#L26750-L26783) 固定 method/path；[`py115 UploadInfoApi`](https://github.com/deadblue/py115/blob/7f96f039be7ec62b937ee41290ba9469aca6921e/src/py115/lowlevel/api/upload.py) 固定顶层 `user_id` / `userkey` 映射。二者都属于公开实现证据，不代替目标账号实测。
@@ -186,7 +187,7 @@ Emby `PlaybackInfo` 提供媒体源 `Path` 和可能缺失或不可靠的 `Size`
 - 最终文件在已经确定的父目录内使用“精确文件名 + 非目录”匹配。零候选返回 `ErrSourceFileNotFound`，多个同名候选即使 Size 不同也返回 `ErrSourceFileAmbiguous`，禁止任意选择第一条。唯一命中后必须由 115 响应提供合法 fileId、pickCode、SHA1、正数 Size 和正确 parentId；这些 Provider 字段才是后续文件身份。
 - 为了检测最终文件同名项，最终目录必须读取完整分页快照；快照 count 变化或分页不连续按协议错误处理。首期最多检查 `10,000` 项，超过返回 `ErrSourceDirectoryTooLarge`。中间目录由 Provider 路径接口选择，Ember 不再自行枚举并判断同名目录歧义。
 - 最终返回的 `fileId/pickCode/SHA1/size/parentId` 才是源文件身份；文件名和路径本身不能替代内容身份。
-- 源解析的业务拒绝、响应协议异常和无效源文件身份只使本次 DirectPlay 失败，不据此回写源账号 `error`；目录/文件未找到、同名文件歧义和目录超限同样属于请求级错误。Gateway 继续按 `providerOperation=resolve_source_path` 记录失败并回退 Emby，DirectPlay 释放本次新建的播放 reservation。明确的 `ErrCredentialRejected` 和 `ErrProviderUnavailable` 仍分别触发凭证停用与临时冷却；源 preID/challenge 的文件级业务和协议错误同样不代表整个账号故障；播放账号操作保留既有健康分类。
+- 源解析的业务拒绝、响应协议异常和无效源文件身份只使本次 DirectPlay 失败，不据此回写源账号 `error`；目录/文件未找到、同名文件歧义和目录超限同样属于请求级错误。Gateway 继续按 `providerOperation=resolve_source_path` 记录失败并回退 Emby，DirectPlay 释放本次新建的播放 reservation。明确的 `ErrCredentialRejected` 和 `ErrProviderUnavailable` 仍分别触发凭证停用与临时冷却；源 preID/challenge 的文件级业务和协议错误同样不代表整个账号故障；播放账号操作按 §10.2 区分已识别文件失败与账号级错误。
 
 2026-09-08 源目录并发读取合同：
 
@@ -290,7 +291,7 @@ Ember 的 `CookieHTTPAdapter.InitRapidUpload` 当前固定：
 - 只发送 `POST /4.0/initupload.php?k_ec=<token>`；请求体是 `BuildUploadRequest` 生成的 AES-CBC 密文，应用层 Header 固定包含 Cookie、`Accept: */*`、`Content-Type: application/x-www-form-urlencoded` 和上传专用 User-Agent，不发送 `Authorization`。
 - 固定向量覆盖 `fileid`、`filename`、`filesize`、`target`、可选 `preid`、`sign_key/sign_val`、`topupload=true`、`userid/userkey`、appVersion、`sig/token` 和密文；测试数据不含真实账号或文件。
 - HTTP `2xx` 响应先执行 AES-CBC 解密和 LZ4 block 解压，再解析顶层 JSON；网络、非 `2xx`、超限密文、解密失败、非法 JSON 和字段错误均返回脱敏错误，不保存原始响应。
-- 不自动重试固定源码注释中的偶发 `401`；在真实账号验证明确重试条件、次数和幂等边界前，所有非 `2xx` 都按 Provider 不可用处理。
+- 不自动重试固定源码注释中的偶发 `401`；在真实账号验证明确重试条件、次数和幂等边界前，非 `2xx` 都失败：HTTP `429` 使用既有 `ErrProviderRateLimited`，其余沿用 `ErrProviderUnavailable`，不按未知业务码添加重试或风控推断。
 
 状态映射固定为：
 
@@ -318,7 +319,7 @@ data=<RSA encrypted {pickcode,user_id}>
 
 真实播放客户端 User-Agent 必须原样参与本次直链签发，不能使用账号配置的 Provider User-Agent 代替。请求明文只包含单个合法文件 pickCode 和从 Cookie `UID` 规范化的 user ID；RSA 请求与响应变换由 `p115cipher` 边界负责，业务层不接触协议常量。
 
-响应固定为顶层布尔 `state` 和 RSA 加密的 `data` string。解密结果必须只有一个文件条目，且条目的 `pick_code` 与请求完全一致；目录、空 URL、多条记录和 pickCode 错配全部拒绝。RSA 请求向量和任意密文解码向量来自固定 `p115cipher 0.0.5.4` 黑盒输出；HTTP 测试通过 cipher seam 返回合成 JSON，不伪造服务端私钥。
+成功响应固定为顶层布尔 `state=true` 和 RSA 加密的 `data` string；`state=false` 先按 §5.5.1 读取 errno，不要求失败响应仍携带 string data。解密结果必须只有一个文件条目，且条目的 `pick_code` 与请求完全一致；`url=false/null/缺失/空` 按文件不可用拒绝，非法 URL 字段类型、多条记录和 pickCode 错配仍属于协议错误。RSA 请求向量和任意密文解码向量来自固定 `p115cipher 0.0.5.4` 黑盒输出；HTTP 测试通过 cipher seam 返回合成 JSON，不伪造服务端私钥。
 
 公开实现指出下载链接包含以下约束信号：
 
@@ -334,7 +335,7 @@ data=<RSA encrypted {pickcode,user_id}>
 - 只接受绝对 HTTPS URL；禁止 userinfo、显式端口、fragment、IP literal 和非 allowlist 主机。
 - 首期 allowlist 允许 `115.com` 及其子域，并根据 2026-08-22 受控真实响应额外精确允许 `cdnfhnfile.115cdn.net`；不因此开放整个 `*.115cdn.net`。所有匹配都使用完整 hostname 边界，其他 CDN hostname 必须取得同等级真实证据后再逐项加入。
 - `t`、`c`、`f` 必须各出现一次：`t` 是严格晚于当前时间的 Unix 秒并原样映射为 UTC `ExpiresAt`；`c` 是非负并发打开上限，`0` 表示无限；`f="" | 0 | 1 | 3` 分别映射为 none、none、same_user_agent、same_user_agent_and_cookie。
-- 未知 `f` 返回 `ErrDownloadURLIncompatible`；已过期返回 `ErrDownloadURLExpired`；域名/协议不允许返回 `ErrDownloadURLNotAllowed`。
+- 未知 `f` 返回 `ErrDownloadURLIncompatible`；已过期返回 `ErrDownloadURLExpired`；负数 `c` 返回文件级 `ErrFileUnavailable`；域名/协议不允许返回 `ErrDownloadURLNotAllowed`。
 - URL 安全策略拒绝使用类型化 `DownloadURLPolicyError` 保留固定 reason、受限 scheme 和仅含 ASCII hostname；普通 `Error()`、API 和日志仍只看到通用 sentinel。一次性检查器可以显式读取这三个安全字段定位合同漂移，但不能输出 path、query、userinfo、端口值、IP 或完整 URL。
 - Adapter 返回 Provider 原始过期边界，不在这里扣除缓存安全窗口；后续缓存层必须以 `ExpiresAt` 为上限并预留安全窗口。
 - URL、Cookie、RSA 数据、Provider response 和原始错误文本不进入 JSON、日志或错误消息。
@@ -342,6 +343,24 @@ data=<RSA encrypted {pickcode,user_id}>
 `f=3` 会被准确映射，但首期播放网关仍必须按不兼容拒绝 302，因为最终播放器未被证明能够自然携带响应 Cookie。不能把 Cookie 拼进 URL，也不能泄露播放小号凭证。
 
 证据：[`download_url`](https://github.com/ChenyangGao/p115client/blob/608a44396fea08d36131a68beb245be1fe17aa6d/p115client/client.py#L8300-L8457)、[`download_url_app`](https://github.com/ChenyangGao/p115client/blob/608a44396fea08d36131a68beb245be1fe17aa6d/p115client/client.py#L8565-L8657) 和固定源码的 [`p115tiny302 get_downurl`](https://github.com/ChenyangGao/p115client/blob/608a44396fea08d36131a68beb245be1fe17aa6d/modules/p115tiny302/p115tiny302/app.py#L273-L299)。source 账号的 `f=1`、并发上限 `2`、精确 CDN hostname 和同 UA Range 已实测；playback 账号最终直链、完整 CDN 集合和真实 Infuse Header 行为尚未确认。
+
+#### 5.5.1 downurl 文件失败与 errno（未经真实账号证实）
+
+本节依据社区逆向实现定义 Ember 的兼容映射，**未经真实账号证实**，不是 115 官方稳定错误码合同。仅当 HTTP 成功且顶层 `state=false` 时读取 `errno`；接受 JSON 整数或整数 string，不按 `error/message` 文本猜测账号状态。
+
+| downurl 响应 | 公开实现语义 | Ember 映射与账号影响 |
+| --- | --- | --- |
+| `errno=99`、`990001` | 未登录 `ErrNotLogin` | `ErrCredentialRejected`；实际调用账号进入 `expired + disabled` |
+| `errno=70005`、`231011` | 文件不存在或已删除 | `ErrFileUnavailable`；当前文件不可用，fallback，不回写账号健康 |
+| `errno=50003`、`50015` | pickCode 不存在，或不存在/已删除 | `ErrFileUnavailable`；与文件不存在同样隔离 |
+| 缺失、无法识别或其他 `errno` | 未确认 | 保持 `ErrProviderRejected`，不增加凭证失效或风控推断 |
+| 单一且 pickCode 匹配的解密条目中 `url=false/null`、缺失 URL 或空 URL | 无有效文件下载地址 | `ErrFileUnavailable`；不作为账号协议错误 |
+
+证据：社区 Go 实现 [`SheltonZhu/115driver` 固定提交 `542720cb0034954750454e89f32b4852add6e2a9` 的 `pkg/driver/error.go`](https://github.com/SheltonZhu/115driver/blob/542720cb0034954750454e89f32b4852add6e2a9/pkg/driver/error.go) 给出上述 errno 表；同提交 [`pkg/driver/download.go` 的 `FileDownloadUrl.UnmarshalJSON` 与 `Valid`](https://github.com/SheltonZhu/115driver/blob/542720cb0034954750454e89f32b4852add6e2a9/pkg/driver/download.go#L14-L36) 明确容纳 `false/null`。这里只引用公开协议事实，不引入上游运行时依赖。真实端点是否在所有下载场景使用同一错误码仍未证实，未知码不类推。
+
+响应体读取遇到连接中断或 `http.Client.Timeout`，且调用方 context 仍有效时，downurl 与通用 Cookie GET 返回 `ErrProviderUnavailable`，沿用 1 分钟共享冷却；调用方 context 已取消或到期时保留原 context 错误，不写账号故障。成功读取后的超限、解密失败和非法 JSON 仍属于协议错误。
+
+DirectPlay 对已识别的文件不可用、失效/空下载候选、负并发限制、秒传业务拒绝、目标文件复核不符及文件级 challenge 失败只结束当前请求/任务，不据此回写账号 `provider_protocol`。HTTP `429` 沿用 `ErrProviderRateLimited` 与短期限流冷却；裸 HTTP `403` 沿用 `ErrProviderUnavailable` 与默认 1 分钟不可用冷却。未经确认的 115 专有业务码保持既有拒绝分类，不据其猜测限流或账号风控；显式凭证错误与传输故障继续使用原健康状态机。
 
 ### 5.6 删除
 
@@ -432,9 +451,9 @@ SHA1 + size + isDirectory=false
 ### 7.1 源读取故障诊断与预算（2026-10-12）
 
 - 生产日志先出现父目录解析约 10 秒失败，后又出现目录解析成功、起播许可继承通过，但 `hash_source_preid` 在约 1.21 秒失败。现有样本无法确定后者是直链响应解析、解密还是 Range 校验失败，不把任一假设当作协议事实。
-- Debug `provider_operation_completed` 区分 `source_parent/source_list/download_url/source_range/cookie_get`，记录固定 reason、数值 HTTP 状态、networkPhase、DNS/连接/TLS/首字节与总耗时；复用连接的前几项可以为零。`download_url` 描述源取链；`source_range` 的 trace 只在实际 CDN 请求前创建，其网络与首字节耗时不包含先前的取链请求。Debug `source_range_completed` 汇总 `sourceDownloadMs/rangeReadMs/durationMs/success`；前两项分别是取链与 Range 阶段耗时，整次 Hash 总耗时仍计入 DirectPlay `preIDMs/challengeMs`，不可再次相加。HTTP trace 字段不携带域名、IP、URL、Cookie 或原始响应。
+- Debug `provider_operation_completed` 区分 `source_parent/source_list/download_url/source_range/cookie_get/rapid_upload`，记录固定 reason、数值 HTTP 状态、networkPhase、DNS/连接/TLS/首字节与总耗时；复用连接的前几项可以为零。`download_url` 描述源取链；`source_range` 的 trace 只在实际 CDN 请求前创建，其网络与首字节耗时不包含先前的取链请求。Debug `source_range_completed` 汇总 `sourceDownloadMs/rangeReadMs/durationMs/success`；前两项分别是取链与 Range 阶段耗时，整次 Hash 总耗时仍计入 DirectPlay `preIDMs/challengeMs`，不可再次相加。HTTP trace 字段不携带域名、IP、URL、Cookie 或原始响应。秒传的上传信息 GET 与实际上传 POST 分别观测；`rapid_upload` 保留脱敏阶段、HTTP 状态与取消语义，协议错误仍可携带既有有界检查器证据。
 - 失败元数据沿 Provider → DirectPlay → Gateway 传递，最终决策增加 `providerStage/providerReason/providerHTTPStatus`；嵌套直链失败保留 download_url 阶段，不误报为 CDN Range 失败。无精确细分的外部错误使用固定兜底原因，不输出原始错误。
-- DirectPlay 源路径读取（`ResolveFileByPath`）使用与共享目录 flight 对齐的 30 秒预算。每次 preID/challenge 的源片段最多 10 秒：获取源直链与实际 CDN Range 各有独立 5 秒窗口，后者包含 DNS、TCP/TLS、响应头和完整 body 读取。取链窗口包括本地数据面排队及响应解析；取链失败后不发起 Range。各阶段受调用方更早 deadline 和整次加速 2 分钟总 deadline 约束，不新增部署配置。
+- DirectPlay 源路径读取（`ResolveFileByPath`）使用与共享目录 flight 对齐的 30 秒预算。每次 preID/challenge 的获取源直链与实际 CDN Range 各有独立 5 秒窗口，不再由 Service 或 Adapter 额外套 10 秒总定时器；两阶段串行且名义预算之和仍为 10 秒，后者包含 DNS、TCP/TLS、响应头和完整 body 读取。取链窗口包括本地数据面排队及响应解析；取链失败后不发起 Range。各阶段受调用方更早 deadline 和整次加速 2 分钟总 deadline 约束，不新增部署配置。
 - Adapter 的本地阶段超时使用 `ErrSourceRangeTimeout`，DirectPlay 统一映射为 `source_read_timeout` 并保留可用的失败 HTTP 阶段；客户端取消/自身 deadline 保持原有语义。本地预算耗尽与真实网络错误分开，不污染账号健康。共享目录的 30 秒总预算、单 HTTP 10 秒底层上限仍保留；最后一个等待者退出会取消共享请求。
 - 2026-10-12 在部署 `preview-f18c84e`、Emby `4.9.3.0`、Infuse `8.5.6` 上的受控抓包，观察到旧的 5 秒共享 preID 预算分别在 TLS 和等待响应头阶段耗尽；后一例 TCP 建连约 183 ms、源取链约 2.37 s，不能只归因为 SYN 重传。另一个首次转存样本成功，停止后重播命中缓存。该证据指导预算拆分，不证明本次修复已经部署或首帧延迟已经改善；原始抓包和完整响应不进入仓库。
 - 不放宽 Range 的状态、范围、编码、长度校验，不自动重试 retained 写入，不把未经验证的外部响应当成功。真实 115 故障根因仍需要部署后细分日志确认；本次验证依赖 mock 和 PostgreSQL 隔离集成。
@@ -475,7 +494,7 @@ playbackAccountId + SHA1 + size
 4. 以 `playbackAccountId + SHA1 + size` 获取数据库唯一任务和 advisory lock；拿锁后必须再次查询 playback，避免 `HEAD`、预加载、Range 或重连重复秒传。
 5. 锁内仍未命中时，使用 playback Cookie 调用 `InitRapidUpload`，请求的 `TargetParentID` 必须等于该 playback 账号配置的 `targetParentId`：
    - `status=1`：明确失败，禁止下载并上传完整视频。
-   - `provider_rejected`、凭证失败、协议错误或网络错误：按脱敏错误失败并进入对应账号状态/冷却处理，禁止改用 source 账号播放。
+   - 初始化结果状态为 `provider_rejected`：结束当前任务，以 `rapid_upload_unavailable` fallback，不据此写账号 `provider_protocol`。这与调用直接返回 `ErrProviderRejected` 是两种输入；后者仍按 §10.2 的操作分类处理。凭证、传输与协议错误也按该表判断账号影响，禁止改用 source 账号播放。
    - `status=7`：校验 challenge Range，使用 source Cookie 调用 `HashFileRange`；把返回 SHA1 作为 `sign_val`，连同原 `sign_key` 再次调用 playback `InitRapidUpload`。首期只接受一次 challenge；第二次仍非 `status=2` 时失败关闭，除非后续真实合同证明可以安全继续。
    - `status=2`：只表示初始化接受复用，不能直接视为目标文件存在。
 6. 收到 `status=2` 后，使用 playback Cookie 和精确 `targetParentId` 调用 `FindTargetFile`；只有唯一候选同时满足 parent、SHA1、size 和非目录才算成功。
@@ -522,12 +541,37 @@ playbackAccountId + SHA1 + size
 - DirectPlay 当前将 `succeeded/credential_rejected/provider_unavailable/provider_rate_limited/provider_risk_control/provider_protocol` 六种固定账号级结果回写到实际调用的 source/playback 账号；Provider 原始错误和响应体不进入账号 Service。
 - `provider_unavailable` 当前按账号进入默认 1 分钟共享冷却，不让每个播放请求独立重试；冷却未到期时不读取 Cookie，到期后用 PostgreSQL 行锁另延长 1 分钟半开探测租约并只放行一个探测，成功立即恢复 `active`，失败按错误类型重新冷却。
 - `provider_rate_limited` 默认冷却 15 秒，`provider_risk_control` 默认冷却 30 秒，均保留启用意图，不进入 `expired + disabled`。冷却时长可通过 `P115_RATE_LIMIT_COOLDOWN` / `P115_RISK_CONTROL_COOLDOWN` 覆盖；非正值保留默认。风控哨兵与冷却配置已保留，但真实 115 结构化风控错误码尚未实机确认，当前没有 HTTP 触发源，待真实证据接入。
-- Cookie/Web 数据面按账号做本地 FIFO 发牌限流，覆盖源列表、SHA1 查重、downurl、秒传和删除；`Burst`/`MaxWait` 必须为正，`MaxWait=0` 不表示零等待或无限排队。业务上限为 `RPS<=100`、`Burst<=1000`、`MaxWait<=1m`。`RPS=0` 关闭等待；`Inf`/`NaN`/小于 `0.01`、大于 `100`、负数与负零（`-0`/`-0.0`）以及超量 `Burst`/`MaxWait` 保留默认并写日志。115 API `429` 使用 `ErrProviderRateLimited` 并短暂冷却：HTTP 429 是 RFC 6585 / RFC 9110 的标准 Too Many Requests 语义，不是未确认的 115 专有业务码。本地等待超过 `MaxWait` 使用 `ErrDataPlaneQueueLimited`：入队时比较理论等待，入队后还监听真实截止时间，令牌计时器因暂停或锁竞争晚触发时到期安全出队；与发牌同时到期则使用已授令牌，未授牌则归还。不回写账号健康、不进入共享冷却，该请求仍回退 Emby。裸 API `403` 使用 `ErrProviderUnavailable`，与改动前把未识别状态当作通用上游故障的行为一致；文件权限、请求授权等普通 403 不得冷却整账号。`ErrProviderRiskControl` 只在已验证的结构化风控错误码出现时映射，当前无触发源。取消是从等待队列移除，不预分配或回拨未来时隙。CDN Range 读取不取令牌，也不套用该 HTTP 映射。对外仍按 Provider 不可用回退 Emby，不改变播放器可见行为。
-- `credential_rejected` 进入 `expired + disabled`，`provider_protocol` 进入 `error`；请求取消、大目录解析超时、本地数据面排队拒绝、目标文件不可见、下载 Header 不兼容等文件/请求级失败不污染账号健康。
-- 运行期回写同时匹配请求加载时的 Cookie 密文和 `updated_at`；旧请求不能覆盖 Cookie 替换、显式验证、手工启停或较新的运行期结果。健康回写失败不改变原始 302/fallback 结果。
+- Cookie/Web 数据面按账号做本地 FIFO 发牌限流，覆盖源列表、SHA1 查重、downurl、秒传和删除；`Burst`/`MaxWait` 必须为正，`MaxWait=0` 不表示零等待或无限排队。业务上限为 `RPS<=100`、`Burst<=1000`、`MaxWait<=1m`。`RPS=0` 关闭等待；`Inf`/`NaN`/小于 `0.01`、大于 `100`、负数与负零（`-0`/`-0.0`）以及超量 `Burst`/`MaxWait` 保留默认并写日志。115 API `429` 使用 `ErrProviderRateLimited` 并短暂冷却：HTTP 429 是 RFC 6585 / RFC 9110 的标准 Too Many Requests 语义，不是未确认的 115 专有业务码。本地等待超过 `MaxWait` 使用 `ErrDataPlaneQueueLimited`：入队时比较理论等待，入队后还监听真实截止时间，令牌计时器因暂停或锁竞争晚触发时到期安全出队；与发牌同时到期则使用已授令牌，未授牌则归还。不回写账号健康、不进入共享冷却，该请求仍回退 Emby。裸 API `403` 使用 `ErrProviderUnavailable`，沿用默认 1 分钟不可用冷却，不据此推断账号风控。`ErrProviderRiskControl` 只在已验证的结构化风控错误码出现时映射，当前无触发源。取消是从等待队列移除，不预分配或回拨未来时隙。CDN Range 读取不取令牌，也不套用该 HTTP 映射。对外仍按 Provider 不可用回退 Emby，不改变播放器可见行为。
+- `credential_rejected` 进入 `expired + disabled`，账号级 `provider_protocol` 回写进入 `error`；请求取消、大目录解析超时、本地数据面排队拒绝、目标文件不可见、下载 Header 不兼容等文件/请求级失败不污染账号健康。
+- 运行期回写同时匹配请求加载时的 Cookie 密文、`config_version` 和 `updated_at`；旧请求不能覆盖 Cookie 替换、显式验证、手工启停或较新的运行期结果。健康回写失败不改变原始 302/fallback 结果。
 - Cookie 失效、账号风控、下载地址不兼容、普通上传要求、本地数据面排队拒绝和 Provider 限流必须使用不同内部错误码。
 - 负缓存只能短期存在；一次搜索失败不能长期证明文件不存在。
 - 已签发的 CDN 链接无法由 Ember 保证立即失效，封禁和账号失效只能阻止新直链。
+
+### 10.1 数据面限流桶生命周期
+
+生产 Cookie Adapter 共用进程内 Provider UID 限流器，环境配置在首次构造时读取；FIFO、令牌发放、`MaxWait` 和本地排队拒绝语义保持。无等待者且令牌自然回满时，回调回收 UID 桶，不以提前删除桶来刷新突发额度。计时回调同时校验桶身份和代次，旧回调不能触及重绑后的新桶。
+
+个人账号解绑及删除用户都走 revoked tombstone：事务返回被锁定记录的旧 Provider UID，只有提交成功后才通知本进程限流器。事务失败或账号已不存在不清理；未回满或仍有等待者时保留原余额与队列，随后自然回收。API 与 Gateway 仍是独立进程，Gateway 依靠相同空闲回收处理残留，不新增跨进程通知、共享限流存储或 Redis 租约删除。
+
+### 10.2 运行期失败分类
+
+以下只描述 DirectPlay 运行期；显式账号验证继续使用 §5.1 的状态机。Gateway 的 `reasonCode` 与账号健康回写是不同结果，日志出现 `provider_protocol` 并不证明账号已进入 `error`。
+
+| 输入或失败边界 | DirectPlay / Gateway 结果 | 账号健康影响 |
+| --- | --- | --- |
+| `ErrCredentialRejected`，包括 downurl 已识别的 `99/990001` | `account_unavailable` | `expired + disabled`；errno 的公开证据仍未经真实账号证实 |
+| `ErrProviderUnavailable`，包括裸 HTTP `403`、downurl/通用 GET 的非 context 响应体读取失败 | `provider_unavailable` | 默认 1 分钟 `cooling_down` |
+| `ErrProviderRateLimited`，包括 HTTP `429` | `provider_unavailable` | 默认 15 秒限流冷却，可配置 |
+| `ErrProviderRiskControl` | `provider_unavailable` | 默认 30 秒风控冷却，可配置；当前无已验证的 HTTP 触发源 |
+| `ErrFileUnavailable`、`ErrDownloadURLExpired`，或候选 URL 空/过期/并发限制为负 | `file_unavailable` | 不回写账号健康 |
+| 秒传返回 `RapidUploadProviderRejected` / 普通上传要求；目标复核返回不匹配文件 | `rapid_upload_unavailable` / `target_unavailable` | 仅失败当前任务，不写账号 `provider_protocol` |
+| Service 发现 challenge 无效/重复，或目标查重候选重复/身份不符 | `provider_protocol` | 仅当前文件校验失败，不写账号 `provider_protocol` |
+| Provider 返回 `ErrProviderRejected` 或 `ErrProviderProtocol` | `provider_protocol` | 源路径解析、源 preID/challenge 不回写；其他 playback 操作保留既有 `error` 分类 |
+| 本地数据面排队超限、源目录/片段阶段预算耗尽、目标不可见/歧义、下载 Header 或 URL 安全策略拒绝 | 对应本地 fallback 分类 | 不回写账号健康，不因当前请求失败推断账号故障 |
+| 调用方取消或 deadline | 保留 context 错误，Gateway 按适用边界终止为 `499/504` | 不回写故障 |
+
+未知 downurl errno 继续返回 `ErrProviderRejected`，按上表的具体操作分类处理；不把它扩展为凭证失效、限流或风控。已完成的真实 source 路径观察可独立报告成功；playback 只有实际下载接口成功才构成恢复证据，缓存命中不伪造健康成功。半开租约、协议错误恢复条件与阈值保持既有合同。
 
 ## 11. 自动化测试合同
 
@@ -547,7 +591,7 @@ playbackAccountId + SHA1 + size
 12. `status=1` 明确拒绝，且不触发完整文件上传。
 13. 加密请求与解密响应固定向量；有效完整 AES blocks 后的 1 至 15 字节短尾部被忽略，不足一个完整 block 的响应仍拒绝；LZ4 剩余 1–2 字节和零长度终止头按固定实现结束，正数截断 block 仍拒绝。
 14. 并发 `HEAD`、预加载和 Range 只创建一个秒传任务；PostgreSQL 独立 schema 集成测试必须证明相同内容的两个并发 Resolve 只调用一次 fake `InitRapidUpload`。
-15. 下载链接覆盖真实客户端 UA、RSA request/response seam、单记录/pickCode 校验、HTTPS allowlist、唯一 `t/c/f`、过期和未知 Header 模式；播放网关另测 `f=3` 拒绝。
+15. 下载链接覆盖真实客户端 UA、RSA request/response seam、单记录/pickCode 校验、HTTPS allowlist、唯一 `t/c/f`、过期、负数 `c` 和未知 Header 模式；覆盖 `url=false/null/空`、errno 数字/string/未知值、响应体读取中断与 context 取消、文件级健康隔离和 `file_unavailable` fallback；播放网关另测 `f=3` 拒绝。
 16. 删除 Adapter 覆盖单文件表单、同 Provider UID 串行、跨 UID 并行、锁等待取消和错误不重试；第一阶段业务测试必须反向确认 Stopped、会话过期和重复播放都不会调用 `DeleteFile`。
 17. 保留式秒传检查器覆盖双重查重、preID、零/一次 challenge、重复 challenge 拒绝、目标复核、preexisting 快速路径、playback UA Range、`retained=true`、`cleanup.attempted=false` 和 `databaseLockValidated=false`。
 18. 重复播放命中同一 playback 文件时跳过秒传、按既有采样规则刷新 `lastAccessedAt`，并复用合格缓存或签发新临时直链；外部手工删除后查重未命中可以重新创建活动任务。

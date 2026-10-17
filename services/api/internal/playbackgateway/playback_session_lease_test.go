@@ -3,13 +3,16 @@ package playbackgateway
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/konghang/ember/backend/internal/services/directplay"
+	"github.com/konghang/ember/backend/internal/services/p115quota"
 )
 
 type fakePlaybackSessionService struct {
@@ -17,6 +20,68 @@ type fakePlaybackSessionService struct {
 	events []directplay.PlaybackSessionEvent
 	result directplay.PlaybackSessionEventResult
 	err    error
+}
+
+type playbackSessionServiceFunc func(context.Context, directplay.PlaybackSessionEvent) (directplay.PlaybackSessionEventResult, error)
+
+// HandlePlaybackSessionEvent lets a test observe the exact persistence context.
+func (f playbackSessionServiceFunc) HandlePlaybackSessionEvent(ctx context.Context, event directplay.PlaybackSessionEvent) (directplay.PlaybackSessionEventResult, error) {
+	return f(ctx, event)
+}
+
+// TestGatewayStoppedReleasesLeaseAfterRequestCancellation covers both an
+// already-canceled update and disconnect after successful Emby forwarding.
+func TestGatewayStoppedReleasesLeaseAfterRequestCancellation(t *testing.T) {
+	for _, directUpdate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("directUpdate=%t", directUpdate), func(t *testing.T) {
+			keys, err := p115quota.NewKeyDeriver("fixture-root-key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			account, _ := keys.PlaybackAccountKey("100")
+			h := &leaseIdentityHarness{keys: keys, account: account, store: p115quota.NewMemoryLeaseStore(), now: time.Now()}
+			principal := fixturePrincipal()
+			_, err = h.ResolveMediaPath(context.Background(), directplay.MediaPathResolveRequest{
+				UserID: principal.User.ID, MappingID: principal.MappingID, DeviceID: principal.DeviceID, PlaySessionID: "session-1",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			type contextKey struct{}
+			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "retained"))
+			defer cancel()
+			gateway := newVideoTestGateway(t, "http://emby.invalid", &fakeTokenService{principal: principal}, nil, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				cancel()
+				return transferIntentHTTPResponse(r, http.StatusNoContent, ""), nil
+			}), &bytes.Buffer{})
+			var updateContext context.Context
+			gateway.playbackSessionService = playbackSessionServiceFunc(func(ctx context.Context, event directplay.PlaybackSessionEvent) (directplay.PlaybackSessionEventResult, error) {
+				updateContext = ctx
+				deadline, bounded := ctx.Deadline()
+				if ctx.Err() != nil || !bounded || time.Until(deadline) > 2*time.Second || ctx.Value(contextKey{}) != "retained" {
+					t.Error("lease update did not preserve values with an independent two-second budget")
+				}
+				return h.HandlePlaybackSessionEvent(ctx, event)
+			})
+			if directUpdate {
+				cancel()
+				gateway.updatePlaybackSessionLease(ctx, principal, playbackSessionEventSnapshot{kind: playbackSessionEventStop, snapshotState: "recorded", itemID: "item-1", mediaSourceID: "source-1", playSessionID: "session-1"})
+			} else {
+				request := httptest.NewRequest(http.MethodPost, "/Sessions/Playing/Stopped", bytes.NewBufferString(`{"ItemId":"item-1","MediaSourceId":"source-1","PlaySessionId":"session-1"}`)).WithContext(ctx)
+				request.Header.Set("Content-Type", "application/json")
+				request.Header.Set(accessTokenHeader, fixtureAccessToken)
+				response := httptest.NewRecorder()
+				gateway.ServeHTTP(response, request)
+				if response.Code != http.StatusNoContent {
+					t.Fatalf("forwarded stop status=%d", response.Code)
+				}
+			}
+			usage, _ := h.store.AccountUsage(context.Background(), account, h.now)
+			if !h.result.Found || usage.OccupiedStreams != 0 || updateContext == nil || updateContext.Err() != context.Canceled {
+				t.Fatalf("stop found=%t occupied=%d; update context must be canceled on completion", h.result.Found, usage.OccupiedStreams)
+			}
+		})
+	}
 }
 
 func (service *fakePlaybackSessionService) HandlePlaybackSessionEvent(

@@ -12,12 +12,13 @@ import (
 type playbackSessionBinding struct {
 	source         PlaybackProof
 	created, until time.Time
+	sequence       uint64
 }
 
 // rememberPlaybackSession records an admitted redirect's verified client
 // identity. A stopped/replaced in-flight proof cannot publish a late binding.
 func (cache *playbackProofCache) rememberPlaybackSession(proof PlaybackProof, principal embytoken.Principal) {
-	if cache == nil || cache.now == nil || (proof.intentOriginSession == "" && !proof.transferIntent) {
+	if cache == nil || cache.now == nil || cache.maxEntries <= 0 || (proof.intentOriginSession == "" && !proof.transferIntent) {
 		return
 	}
 	cache.mu.Lock()
@@ -44,10 +45,9 @@ func (cache *playbackProofCache) rememberPlaybackSession(proof PlaybackProof, pr
 		}
 		return // Video traffic cannot extend confirmed playback activity.
 	}
-	if len(cache.sessions) >= cache.maxEntries {
-		return
-	}
-	cache.sessions[key] = playbackSessionBinding{source: proof, created: now, until: now.Add(p115quota.ReservationTTL)}
+	makePlaybackCacheRoomLocked(cache.sessions, key, cache.maxEntries, func(binding playbackSessionBinding) (time.Time, uint64) { return binding.created, binding.sequence })
+	cache.generation++
+	cache.sessions[key] = playbackSessionBinding{source: proof, created: now, until: now.Add(p115quota.ReservationTTL), sequence: cache.generation}
 }
 
 // sessionOriginLocked links a fresh independently authorized proof to one live

@@ -226,6 +226,9 @@ func TestIntentBridgeStorageBoundedAndExpired(t *testing.T) {
 	if len(cache.intents) != 1 {
 		t.Fatal("intent storage exceeded capacity")
 	}
+	if _, ok := cache.intents[playbackProofKey{"mapping-1", "second", "source-1", "session-1"}]; !ok {
+		t.Fatal("full cache rejected the newest intent")
+	}
 	now = now.Add(playbackTransferIntentTTL)
 	cache.Len()
 	if len(cache.intents) != 0 {

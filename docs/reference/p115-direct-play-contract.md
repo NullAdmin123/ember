@@ -345,7 +345,11 @@ Authorization: Bearer <account-access-token>
 - Provider 原始错误响应必须脱敏，禁止保存完整响应体。
 - 未确认的错误码不能写成稳定业务语义，必须保留原始错误码的脱敏映射能力。
 
-当前 Ember 内部实现把已经固定的 Provider sentinel 收口为六种账号级结果：成功、凭证失效、临时不可用、限流、风控和协议错误。临时不可用进入默认 1 分钟 `cooling_down`；限流默认 15 秒、风控默认 30 秒，均只短暂冷却且不 `expired + disabled`。冷却期间不读取 Cookie，到期后通过 PostgreSQL 行锁另延长 1 分钟半开探测租约并只放行一个探测。成功恢复 `active`，凭证失效进入 `expired + disabled`，协议错误进入 `error`。回写以 Cookie 密文和 `updated_at` 作为请求代际条件，旧请求不能覆盖新的凭证或账号状态；请求取消、大目录解析超时、本地数据面排队超限和文件级错误不进入账号健康。本地 `MaxWait` 拒绝与 115 API `429` 必须使用不同内部错误，前者只让当前请求回退 Emby；`MaxWait` 同时约束入队估计和实际排队时长。Cookie/Web HTTP（含删除）在发请求前取令牌；等待队列按 FIFO 发牌，取消即出队。裸 HTTP `429` 按 RFC 6585 / RFC 9110 Too Many Requests 映射 `ErrProviderRateLimited`，已有 fake HTTP 证据；这是标准 HTTP 限流语义，不是未确认的 115 专有业务码。裸 HTTP `403` 按通用上游故障映射 `ErrProviderUnavailable`，不得写成账号风控。`ErrProviderRiskControl` 与 30 秒冷却配置保留，但真实 115 结构化风控错误码尚未实机确认，当前没有 HTTP 触发源，待真实证据接入。真实 115 限流错误码、生产冷却时长和恢复行为仍未实机确认。
+当前 Ember 内部健康状态机接受成功、凭证失效、临时不可用、限流、风控和协议错误六种固定结果；是否回写取决于具体操作和错误类型，不能由 Gateway 的 fallback reason 单独推断。运行期回写匹配 Cookie 密文、`config_version` 和 `updated_at`，旧请求不能覆盖新的凭证或状态；请求取消、本地预算/排队超限和已识别文件失败不回写故障。source 路径与源片段的业务/协议错误隔离，playback 只有实际下载接口成功才构成恢复证据，缓存命中不伪造成功。
+
+上述是当前 Cookie Provider 的内部实现事实，完整分类与未实机确认边界见 [Cookie 合同 §10.2](./p115-cookie-playback-contract.md#102-运行期失败分类)：临时不可用默认冷却 1 分钟，HTTP `429` 默认限流冷却 15 秒，裸 HTTP `403` 仍是临时不可用而非账号风控；风控 sentinel 与默认 30 秒冷却保留，当前无已验证的 HTTP 触发源。明确凭证失效进入 `expired + disabled`，账号级协议错误进入 `error`。冷却到期后仍通过 PostgreSQL 行锁发放 1 分钟半开租约，成功恢复 `active`。
+
+Cookie/Web 数据面沿用进程内 UID FIFO、令牌余额与 `MaxWait`，生产 Adapter 共享本进程限流器，空闲且自然回满后回收桶；提交成功的 tombstone 清理不提前刷新额度或中断等待者。源片段取链/Range 各有独立 5 秒窗口，没有额外竞争的 10 秒总定时器。这些 Cookie 端点、errno 与回收实现不构成官方 OpenAPI 的协议证明；未来 OpenAPI Provider 必须独立核对其错误码和时间合同，不能直接套用 Chrome downurl 的兼容表。
 
 ## 11. 测试与真实验证边界
 

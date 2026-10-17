@@ -135,3 +135,46 @@ func TestServiceRevokePersonalAccountIsIdempotentAndKeepsNoRuntimeFields(t *test
 		t.Fatalf("idempotent revoke error = %v", err)
 	}
 }
+
+// TestRevocationForgetsOnlyCommittedUID covers self-unbind and the narrow
+// user-deletion revoker, including failed tombstones and idempotent retries.
+func TestRevocationForgetsOnlyCommittedUID(t *testing.T) {
+	for _, controlPlane := range []bool{false, true} {
+		for _, fail := range []bool{false, true} {
+			store := &fakeAccountStore{accounts: map[string]*models.P115Account{"personal": {
+				ID: "personal", OwnerUserID: stringPointer("user-1"), ProviderUserID: stringPointer("12345"),
+				Role: models.P115AccountRolePlayback, Status: models.P115AccountStatusActive,
+			}}}
+			if fail {
+				store.revokeErr = errors.New("fixture transaction failed")
+			}
+			calls := 0
+			forget := func(uid string) {
+				calls++
+				if uid != "12345" || store.accounts["personal"].Status != models.P115AccountStatusRevoked {
+					t.Fatal("cleanup ran before tombstone commit or targeted the wrong UID")
+				}
+			}
+			service := newServiceWithDependencies(store, fakeCredentialCipher{})
+			service.forgetAccount = forget
+			revoke := service.RevokePersonalAccount
+			if controlPlane {
+				revoker := &ControlPlaneRevoker{store: store, forgetAccount: forget}
+				revoke = revoker.RevokePersonalAccount
+			}
+			err := revoke(context.Background(), "user-1")
+			if fail {
+				if !errors.Is(err, store.revokeErr) || calls != 0 {
+					t.Fatal("failed transaction changed the limiter")
+				}
+			} else {
+				if err != nil || calls != 1 {
+					t.Fatalf("committed revoke error=%v cleanupCalls=%d", err, calls)
+				}
+				if err := revoke(context.Background(), "user-1"); err != nil || calls != 1 {
+					t.Fatal("idempotent revoke repeated UID cleanup")
+				}
+			}
+		}
+	}
+}

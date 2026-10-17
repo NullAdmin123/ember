@@ -3,13 +3,16 @@ package playbackgateway
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/konghang/ember/backend/internal/services/directplay"
 	"github.com/konghang/ember/backend/internal/services/embytoken"
 )
 
 // updatePlaybackSessionLease mirrors only successfully forwarded Emby events
-// into an existing 115 reverse session. Failures never alter the Emby response.
+// into an existing 115 reverse session. Persistence has its own two-second
+// budget so a client disconnect cannot prevent a successful Stopped release.
+// Failures never alter the Emby response.
 func (gateway *Gateway) updatePlaybackSessionLease(
 	ctx context.Context,
 	principal embytoken.Principal,
@@ -34,7 +37,9 @@ func (gateway *Gateway) updatePlaybackSessionLease(
 		return
 	}
 	gateway.debugf("[PlaybackGateway] level=debug code=playback_lease_update_started requestId=%s sessionRef=%s event=%s itemId=%q", requestID, sessionRef, event.kind, event.itemID)
-	result, err := gateway.playbackSessionService.HandlePlaybackSessionEvent(ctx, directplay.PlaybackSessionEvent{
+	updateContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	result, err := gateway.playbackSessionService.HandlePlaybackSessionEvent(updateContext, directplay.PlaybackSessionEvent{
 		UserID: principal.User.ID, MappingID: principal.MappingID, DeviceID: principal.DeviceID,
 		PlaySessionID: event.playSessionID,
 		IsProgress:    event.kind == playbackSessionEventProgress,
