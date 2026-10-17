@@ -390,7 +390,7 @@ func TestCanceledWaiterDoesNotReleaseRunningOwnerGuard(t *testing.T) {
 	}()
 	<-started
 	gateway.playbackInfoFlights.mu.Lock()
-	call := gateway.playbackInfoFlights.calls["mapping-1\x00item-1\x00source-1"]
+	call := gateway.playbackInfoFlights.calls[playbackInfoFlightKey(fixturePrincipal(), "item-1", "source-1", fixtureAccessToken)]
 	gateway.playbackInfoFlights.mu.Unlock()
 	cancel()
 	if reason := <-done; reason != "request_canceled" {

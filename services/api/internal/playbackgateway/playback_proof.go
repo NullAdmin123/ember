@@ -13,6 +13,7 @@ const (
 	defaultPlaybackProofTTL        = 5 * time.Minute
 	playbackTransferIntentTTL      = 30 * time.Second
 	defaultPlaybackProofMaxEntries = 4096
+	maxPlaybackEntriesPerMapping   = 64
 	maxProofMappingIDBytes         = 25
 	maxProofServerIDBytes          = 64
 	maxProofUserIDBytes            = 25
@@ -72,6 +73,7 @@ type playbackProofKey struct {
 type playbackProofPublishGuard struct {
 	mappingID   string
 	itemID      string
+	deviceID    string
 	client      bool
 	invalidated bool
 }
@@ -139,9 +141,7 @@ func (cache *playbackProofCache) recordLocked(proofs []PlaybackProof, now time.T
 			mappingID: proof.MappingID, itemID: proof.ItemID,
 			mediaSourceID: proof.MediaSourceID, playSessionID: proof.PlaySessionID,
 		}
-		if _, exists := cache.entries[key]; !exists && len(cache.entries) >= cache.maxEntries {
-			cache.evictEarliestLocked()
-		}
+		makePlaybackCacheRoomLocked(cache.entries, key, cache.maxEntries, func(proof PlaybackProof) (time.Time, uint64) { return proof.AuthorizedAt, proof.generation })
 		proof.AuthorizedAt = now
 		proof.ExpiresAt = now.Add(cache.ttl)
 		cache.generation++
@@ -172,13 +172,13 @@ func (cache *playbackProofCache) BeginOnDemand(principal embytoken.Principal, it
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	cache.pruneExpiredLocked(cache.now().UTC())
-	if proof, ok := cache.lookupLatestMediaSourceLocked(principal.MappingID, itemID, mediaSourceID); ok && playbackProofMatchesPrincipal(proof, principal) {
+	if proof, ok := cache.lookupLatestMediaSourceLocked(principal, itemID, mediaSourceID); ok {
 		return proof, nil
 	}
 	if len(cache.publications) >= cache.maxEntries {
 		return PlaybackProof{}, nil
 	}
-	guard := &playbackProofPublishGuard{mappingID: principal.MappingID, itemID: itemID}
+	guard := &playbackProofPublishGuard{mappingID: principal.MappingID, itemID: itemID, deviceID: principal.DeviceID}
 	cache.publications[guard] = struct{}{}
 	return PlaybackProof{}, guard
 }
@@ -214,7 +214,8 @@ func (cache *playbackProofCache) ReleasePublication(guard *playbackProofPublishG
 
 // PublishOnDemand replaces the complete item snapshot only while its request
 // guard remains current. Publication invalidates competing internal requests,
-// including other sources, so late responses cannot reverse the newer state.
+// including other sources on the same device, so late responses cannot reverse
+// that device's newer state or supersede a different device's pending response.
 func (cache *playbackProofCache) PublishOnDemand(guard *playbackProofPublishGuard, proofs []PlaybackProof) (int, bool) {
 	return cache.publishGuarded(guard, proofs, false)
 }
@@ -250,17 +251,24 @@ func (cache *playbackProofCache) publishEvidence(guard *playbackProofPublishGuar
 	if _, active := cache.publications[guard]; !active || guard.invalidated || guard.client != client {
 		return 0, 0, false
 	}
-	cache.invalidateItemLocked(guard.mappingID, guard.itemID, client)
+	if client {
+		cache.invalidateItemLocked(guard.mappingID, guard.itemID, true)
+	} else {
+		cache.invalidateOnDemandItemLocked(guard.mappingID, guard.itemID, guard.deviceID)
+	}
 	now := cache.now().UTC()
 	cache.pruneExpiredLocked(now)
 	retained := 0
 	for _, intent := range intents {
-		if len(cache.intents) >= cache.maxEntries {
-			break
-		}
+		key := playbackProofKey{intent.MappingID, intent.ItemID, intent.MediaSourceID, intent.PlaySessionID}
+		makePlaybackCacheRoomLocked(cache.intents, key, cache.maxEntries, func(grant playbackIntentGrant) (time.Time, uint64) {
+			return grant.source.AuthorizedAt, grant.source.generation
+		})
 		intent.AuthorizedAt = now
 		intent.transferIntentUntil = now.Add(playbackTransferIntentTTL)
-		cache.intents[playbackProofKey{intent.MappingID, intent.ItemID, intent.MediaSourceID, intent.PlaySessionID}] = playbackIntentGrant{source: intent}
+		cache.generation++
+		intent.generation = cache.generation
+		cache.intents[key] = playbackIntentGrant{source: intent}
 		retained++
 	}
 	if !client {
@@ -378,9 +386,9 @@ func (cache *playbackProofCache) Lookup(mappingID, itemID, mediaSourceID, playSe
 	return proof, status == playbackProofFound
 }
 
-// LookupLatestMediaSource returns the freshest non-expired proof for one exact
-// mapping/item/source when a client omits PlaySessionId on a later stream URL.
-func (cache *playbackProofCache) LookupLatestMediaSource(mappingID, itemID, mediaSourceID string) (PlaybackProof, bool) {
+// LookupLatestMediaSource returns the freshest non-expired proof matching the
+// complete principal and item/source when a later stream omits PlaySessionId.
+func (cache *playbackProofCache) LookupLatestMediaSource(principal embytoken.Principal, itemID, mediaSourceID string) (PlaybackProof, bool) {
 	if cache == nil || cache.now == nil {
 		return PlaybackProof{}, false
 	}
@@ -388,16 +396,17 @@ func (cache *playbackProofCache) LookupLatestMediaSource(mappingID, itemID, medi
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	cache.pruneExpiredLocked(now)
-	return cache.lookupLatestMediaSourceLocked(mappingID, itemID, mediaSourceID)
+	return cache.lookupLatestMediaSourceLocked(principal, itemID, mediaSourceID)
 }
 
-// lookupLatestMediaSourceLocked selects the newest proof without releasing the
-// lock, allowing the on-demand owner to combine reuse and guard registration.
-func (cache *playbackProofCache) lookupLatestMediaSourceLocked(mappingID, itemID, mediaSourceID string) (PlaybackProof, bool) {
+// lookupLatestMediaSourceLocked filters identity before choosing the latest
+// proof, so another device's newer observation cannot hide a reusable proof.
+// The caller can atomically combine reuse with owner guard registration.
+func (cache *playbackProofCache) lookupLatestMediaSourceLocked(principal embytoken.Principal, itemID, mediaSourceID string) (PlaybackProof, bool) {
 	var latest PlaybackProof
 	found := false
 	for key, proof := range cache.entries {
-		if key.mappingID != mappingID || key.itemID != itemID || key.mediaSourceID != mediaSourceID {
+		if key.mappingID != principal.MappingID || key.itemID != itemID || key.mediaSourceID != mediaSourceID || !playbackProofMatchesPrincipal(proof, principal) {
 			continue
 		}
 		if !found || proof.AuthorizedAt.After(latest.AuthorizedAt) ||
@@ -497,21 +506,52 @@ func (cache *playbackProofCache) pruneExpiredLocked(now time.Time) {
 	}
 }
 
-// evictEarliestLocked removes one entry with the nearest expiry while the
-// caller holds cache.mu.
-func (cache *playbackProofCache) evictEarliestLocked() {
-	var earliestKey playbackProofKey
-	var earliest time.Time
-	found := false
-	for key, proof := range cache.entries {
-		if !found || proof.ExpiresAt.Before(earliest) {
-			earliestKey = key
-			earliest = proof.ExpiresAt
-			found = true
+// invalidateOnDemandItemLocked supersedes internal snapshots only for this
+// device. Other devices can finish independently; client observations retain
+// their existing authority over the mapping/item and its in-flight requests.
+func (cache *playbackProofCache) invalidateOnDemandItemLocked(mappingID, itemID, deviceID string) {
+	for guard := range cache.publications {
+		if guard.mappingID == mappingID && guard.itemID == itemID && guard.deviceID == deviceID && !guard.client {
+			guard.invalidated = true
 		}
 	}
-	if found {
-		delete(cache.entries, earliestKey)
+	for key, proof := range cache.entries {
+		if key.mappingID == mappingID && key.itemID == itemID && proof.DeviceID == deviceID {
+			delete(cache.entries, key)
+		}
+	}
+}
+
+// makePlaybackCacheRoomLocked bounds each retained store to 64 entries per
+// mapping and its existing global capacity. New writes evict the oldest entry
+// from their own mapping first, so one mapping cannot flush another's records.
+// A new mapping at global capacity evicts the globally oldest entry. Updates
+// of an existing key never evict an unrelated entry. The caller holds cache.mu.
+// Sequence numbers break timestamp ties, including one batched response.
+func makePlaybackCacheRoomLocked[V any](entries map[playbackProofKey]V, incoming playbackProofKey, maxEntries int, observedAt func(V) (time.Time, uint64)) {
+	if _, exists := entries[incoming]; exists {
+		return
+	}
+	var oldest, ownOldest playbackProofKey
+	var oldestAt, ownOldestAt time.Time
+	var oldestSequence, ownOldestSequence uint64
+	found, ownCount := false, 0
+	for key, entry := range entries {
+		at, sequence := observedAt(entry)
+		if !found || at.Before(oldestAt) || at.Equal(oldestAt) && sequence < oldestSequence {
+			oldest, oldestAt, oldestSequence, found = key, at, sequence, true
+		}
+		if key.mappingID == incoming.mappingID {
+			if ownCount == 0 || at.Before(ownOldestAt) || at.Equal(ownOldestAt) && sequence < ownOldestSequence {
+				ownOldest, ownOldestAt, ownOldestSequence = key, at, sequence
+			}
+			ownCount++
+		}
+	}
+	if ownCount >= maxPlaybackEntriesPerMapping || len(entries) >= maxEntries && ownCount > 0 {
+		delete(entries, ownOldest)
+	} else if len(entries) >= maxEntries && found {
+		delete(entries, oldest)
 	}
 }
 

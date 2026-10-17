@@ -390,10 +390,10 @@ Gateway 对层级精确的用户条目 `200 application/json` 响应执行以下
 - 每次仍先完成 Token 映射和实时用户状态检查；优先复用同一 `mappingId + itemId + mediaSourceId` 下最新、未过期，且 `serverId/userId/embyUserId/deviceId` 与当前 Principal 完全一致的现有 PlaybackInfo 证明。身份不一致时重新向 Emby 解析，不能把旧 PlaySessionId 拼进 fallback。
 - 无可复用证明时，Gateway 使用当前请求已经归一的用户 AccessToken，对同一 Emby 上游执行 `GET /emby/Items/{Id}/PlaybackInfo?UserId={Principal.EmbyID}`。不使用部署管理员 API Key，不把 Token 放入内部 URL，也不调用 Gateway 自身公网入口。
 - 保留合法 Emby/MediaBrowser 应用头和客户端/设备元数据；只有原请求没有可用内嵌 Token 时，内部请求才使用 `X-Emby-Token` 携带同一个已映射 Token。内部请求不继承客户端任意压缩声明，只广告 Gateway 可有界解码的 `gzip, deflate`。
-- 单次内部调用固定 10 秒超时；相同 mapping/item/mediaSource 的并发请求使用进程内 singleflight 合并。每个等待方可独立取消，resolver 使用自有超时，panic 转为固定 `internal_failure`。
+- 单次内部调用固定 10 秒超时；相同 mapping/item/mediaSource/device/Token-SHA256 的并发请求使用进程内 singleflight 合并，键不保留明文 Token 或输出日志；证明复用先按完整 Principal 筛选，再选择最新记录，避免其他设备的新证明遮蔽本设备仍有效的证明。每个等待方可独立取消，resolver 使用自有超时，panic 转为固定 `internal_failure`。
 - 只接受无重定向 `200 application/json`、`identity/gzip/deflate/br`、非空有界 PlaySessionId、无重复 MediaSourceId，以及与请求 item/source 精确匹配且 Container 合法的 MediaSource。
 - 合格 DirectPlay MediaSource 继续通过现有 `buildPlaybackProofs` 写入原证明缓存；Path、Container、SupportsDirectPlay 或身份合同不合格时仍可用 PlaySessionId+Container 修复正常 Emby fallback，但不能获得 115 证明。Emby Size 只作为观察字段，零、缺失、负数或与 Provider 不一致都不影响 proof。
-- 实际 singleflight owner 在同一缓存锁内复查可复用 proof，未命中才登记有界、仅请求期的内部发布令牌。结果发布也在同一锁内校验令牌并替换整个 item 快照；客户端响应已更新该 item、或另一内部结果已先发布时，旧结果丢弃并 fallback，不能删除新起播 proof，也不能借用新许可。内部发布只使同 item 其他内部令牌失效，不撤销正在读取 body 的客户端观察。不同 mapping/item 相互隔离；令牌在实际内部请求退出时释放，单个等待方取消不提前释放仍在途令牌。
+- 实际 singleflight owner 在同一缓存锁内复查可复用 proof，未命中才登记有界、仅请求期的内部发布令牌。结果发布也在同一锁内校验令牌并替换同 mapping/item/device 的快照；客户端响应已更新该 item、或同设备另一内部结果已先发布时，旧结果丢弃并 fallback，不能删除新起播 proof，也不能借用新许可。内部发布只使同 mapping/item/device 的其他内部令牌失效，不撤销正在读取 body 的客户端观察；其他设备可独立完成补查和使用各自证明。不同 mapping/item 相互隔离；令牌在实际内部请求退出时释放，单个等待方取消不提前释放仍在途令牌。
 - Gateway 将 115 决策请求与正常 Emby fallback 请求分开：决策请求只追加缺失的 Container/PlaySessionId；fallback 优先使用所选 MediaSource 的 `SupportsDirectStream=true + DirectStreamUrl`。
 - DirectStreamUrl 只接受无 scheme/host/user/fragment、当前 Item、固定 `/Videos/{Id}/stream[.{Container}]` 或文件名形态、匹配的 MediaSourceId/PlaySessionId/Static/Container。全部 URL Token aliases 在转发前删除，并由当前已映射用户 Token Header 替代；未知 Item、绝对 URL、编码 path、重复/错配参数和 manifest 全部拒绝采用。
 - DirectStreamUrl 缺失或未通过校验时，按 Emby 官方 Web 客户端行为把 plain stream 改为 `/Videos/{Id}/stream.{Container}`；无法形成单一安全扩展名时才保留补齐参数后的 plain stream。
@@ -421,8 +421,8 @@ mappingId + itemId + mediaSourceId + playSessionId
 - 只有 `200 application/json`、空 `ErrorCode`、非空有界 `PlaySessionId` 和至少一个合格 MediaSource 才记录。
 - 请求 path `ItemId` 是条目真相；MediaSource.ItemId 可空，非空时必须与 path 一致。
 - MediaSource 必须具备唯一非空 Id、非空有界 Path 和 `SupportsDirectPlay=true`；重复 MediaSourceId 使整次响应不产生证明。Size 不参与 proof，115 候选归属由 Path 的 source 前缀映射决定。
-- 固定 TTL 为 5 分钟，最大 4096 条；写入和查询都延迟清理过期项，满载时淘汰最早过期项，不启动后台 goroutine。
-- 有资格形成证明的客户端 PlaybackInfo 响应在入口原子使同 `mappingId + itemId` 的旧 proof/两类在途令牌失效，并登记本次客户端观察；终态仅在自己的令牌仍有效时原子替换整个 item。非 `200`、错误或不可用响应以空快照结束，旧内部 GET 不得在其后恢复旧证明；较新客户端观察已开始后，旧客户端成功/失败收尾也不能删除其快照。两类令牌共用有界容量并随实际观察结束释放。内部 GET 保持整 item 快照语义，但只有令牌仍有效时才能原子发布；检查与写入不可分离。
+- 固定 TTL 为 5 分钟，全局最大 4096 条，每个 mapping 最多 64 条。证明、独立起播许可和播放关联三个存储各自执行此容量合同：超出 mapping 配额，或全局已满且当前 mapping 已有记录时，淘汰同 mapping 最旧记录；新 mapping 在全局满载时淘汰全局最旧记录。起播许可和播放关联满载后接纳新记录，不直接拒绝。最旧按授权/创建时间确定，相同时间按写入顺序；写入和查询仍延迟清理过期项，不启动后台 goroutine。
+- 有资格形成证明的客户端 PlaybackInfo 响应在入口原子使同 `mappingId + itemId` 的旧 proof/两类在途令牌失效，并登记本次客户端观察；终态仅在自己的令牌仍有效时原子替换整个 item。非 `200`、错误或不可用响应以空快照结束，旧内部 GET 不得在其后恢复旧证明；较新客户端观察已开始后，旧客户端成功/失败收尾也不能删除其快照。两类令牌共用有界容量并随实际观察结束释放。内部 GET 保持同 mapping/item/device 内的整 item 快照语义，但只有令牌仍有效时才能原子发布；检查与写入不可分离。
 - 视频请求仍必须先重新执行 `ResolvePrincipal`，再用完全相同的 mapping/item/mediaSource/playSession 查询；缓存不能绕过撤销或用户实时状态。
 - 进程重启会丢失证明；此时视频请求不能获得 115 302，但应 fallback 到 Emby，Infuse 再次调用 PlaybackInfo 后重建证明。多 Gateway 共享 PlaybackInfo 证明仍未实现，也不能把后续 Redis 当前播放租约误当成持久证明缓存。
 - Token 和完整 PlaybackInfo 响应不进入日志；完整 Path 按运维授权进入上述 MediaSource 观察与最终视频决策日志。缓存对象只存在于 Gateway 进程内，不序列化为 API。
@@ -547,11 +547,11 @@ Content-Type: application/json
 网关处理要求：
 
 - 三类会话请求必须继续转发给 Emby，保持播放历史和进度能力。
-- 网关旁路观察事件，在 Emby 成功接受后更新已有 Redis 播放租约，Stopped 同时撤销已记录的匹配新增转存许可；不能篡改客户端上报内容，也不创建数据库播放会话。
+- 网关旁路观察事件，在 Emby 成功接受后更新已有 Redis 播放租约；更新使用保留上下文值的 `context.WithTimeout(context.WithoutCancel(request.Context()), 2*time.Second)`，客户端在成功转发后断连不取消已接受事件的租约收口。Stopped 同时撤销已记录的匹配新增转存许可；不能篡改客户端上报内容，也不创建数据库播放会话。
 - 当前 Gateway 只在本地身份门控成功后最多旁路读取 `64 KiB` JSON 请求副本并恢复原始 body，提取有界 `ItemId/MediaSourceId/PlaySessionId/PositionTicks/IsPaused` 用于日志、成功事件的租约更新及停止许可撤销；未通过身份门控时不读取 body，非法、超大、非 JSON 或不支持编码的已认证 body 仍透明转发并只记录固定 `snapshotState`。
 - Redis sessionFingerprint 以 `PlaySessionId + Ember 用户 + 设备` 为主要维度。合格 GET 在 302 前只建立短期 `reservation` 并进入账号/用户占用索引；只有成功转发给 Emby 的 Playing 或 Progress 才能把已有 reservation 晋级为 `active`，API 真实活跃数不包含 reservation。
 - 对于已通过完整身份与媒体匹配、继承客户端显式起播意图的内部 proof，Gateway 在建立租约时使用 proof 记录的原客户端 PlaySessionId，内部补查 PlaySessionId 仍只用于媒体证明查找。事件请求及发往 Emby 的 body 完全不改写；后续 Playing/Progress/暂停/Stopped 自然命中同一 Redis 租约。该租约身份不会在 30 秒意图或 5 分钟 proof 到期时切换，续期仍仅由真实成功事件驱动。Debug `playback_lease_session_bound` 用 sessionRef/proofSessionRef 关联两者，不输出原始会话 ID。未建立可信关联时维持原会话策略，不按 item/device 猜测匹配；缺失/过期租约仍不由事件重建。
-- proof 缓存同一锁内保存有界播放关联（最多 4096 条），成功准入的视频证明建立 30 秒候选，成功命中租约的真实事件分别按 active 2 分钟、paused 15 分钟更新；视频请求不续活动期。新内部 proof 在 server/user/mapping/device/client/item/source/path/container/已知 size 完整匹配且关联仍活跃时，只继承原客户端会话；不续发新增转存许可。停止、租约缺失、过期或新客户端观察清理关联，旧发布令牌和旧 proof 代次不能重新建立它。事件本身不能创建关联或租约，不把关联缓存当作 Redis 准入真相。
+- proof 缓存同一锁内保存有界播放关联（全局最多 4096 条，每个 mapping 最多 64 条，满载优先淘汰同 mapping 最旧关联），成功准入的视频证明建立 30 秒候选，成功命中租约的真实事件分别按 active 2 分钟、paused 15 分钟更新；视频请求不续活动期。新内部 proof 在 server/user/mapping/device/client/item/source/path/container/已知 size 完整匹配且关联仍活跃时，只继承原客户端会话；不续发新增转存许可。停止、租约缺失、过期或新客户端观察清理关联，旧发布令牌和旧 proof 代次不能重新建立它。事件本身不能创建关联或租约，不把关联缓存当作 Redis 准入真相。
 - `Progress + IsPaused=true` 表示暂停，不是 Stopped；`paused` 继续占用账号名额并使用更长 TTL。只有 Stopped 成功转发给 Emby 后才立即释放占用和活跃索引；对应新增转存许可撤销独立于租约是否存在，普通 proof 与媒体缓存保留。
 - `HEAD` 不能创建 reservation 或 active，只有命中同 session 既有租约时才允许复用 115 候选，否则继续 Emby fallback。符合条件的首次/预加载/带 Range GET 在网关侧无法可靠区分，因此最多创建同 session 的一个短 reservation；重复 GET/Range 只能复用，任何视频请求都不能绕过成功的会话事件直接形成 active。
 

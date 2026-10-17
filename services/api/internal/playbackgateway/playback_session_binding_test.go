@@ -117,8 +117,8 @@ func TestStoppedInflightRedirectCannotRememberBinding(t *testing.T) {
 	}
 }
 
-// TestPlaybackBindingsBoundCapacity rejects extra associations without evicting
-// live sessions; expiration frees space without a background cleanup worker.
+// TestPlaybackBindingsBoundCapacity replaces the oldest association when full;
+// expiration still frees space without a background cleanup worker.
 func TestPlaybackBindingsBoundCapacity(t *testing.T) {
 	cache := newPlaybackProofCache(1, time.Minute)
 	now := time.Now()
@@ -132,6 +132,9 @@ func TestPlaybackBindingsBoundCapacity(t *testing.T) {
 	}
 	if len(cache.sessions) != 1 {
 		t.Fatal("binding capacity exceeded")
+	}
+	if _, ok := cache.sessions[playbackProofKey{"mapping-1", "second", "source-1", "client"}]; !ok {
+		t.Fatal("full cache rejected the newest binding")
 	}
 	now = now.Add(p115quota.ReservationTTL)
 	cache.Len()

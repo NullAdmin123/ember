@@ -3,6 +3,7 @@ package playbackgateway
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,100 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/konghang/ember/backend/internal/services/embytoken"
 )
+
+type playbackFlightWaitContext struct {
+	context.Context
+	joined chan struct{}
+	once   sync.Once
+}
+
+// Done signals that Do has registered this waiter, avoiding scheduling sleeps.
+func (ctx *playbackFlightWaitContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.joined) })
+	return ctx.Context.Done()
+}
+
+// TestOnDemandPlaybackInfoSeparatesConcurrentDevices requires separate HTTP
+// calls and simultaneously usable device-bound proofs for the same mapping.
+func TestOnDemandPlaybackInfoSeparatesConcurrentDevices(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	gateway := newVideoTestGateway(t, "http://emby.invalid", &fakeTokenService{principal: fixturePrincipal()}, nil, roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		session := "session-" + r.Header.Get("X-Emby-Device-Id")
+		body := fmt.Sprintf(`{"MediaSources":[{"Id":"source-1","ItemId":"item-1","Path":"/mnt/media/fixture.mkv","Container":"mkv","SupportsDirectPlay":true}],"PlaySessionId":%q}`, session)
+		return transferIntentHTTPResponse(r, http.StatusOK, body), nil
+	}), &bytes.Buffer{})
+	type result struct {
+		principal embytoken.Principal
+		resolved  onDemandPlaybackInfo
+		reason    string
+	}
+	results := make(chan result, 2)
+	resolve := func(principal embytoken.Principal, ctx context.Context) {
+		request := httptest.NewRequest(http.MethodGet, "/Videos/item-1/stream?MediaSourceId=source-1&Static=true", nil).WithContext(ctx)
+		request.Header.Set("X-Emby-Device-Id", principal.DeviceID)
+		resolved, reason := gateway.resolvePlaybackInfoOnDemand(request, principal, fixtureAccessToken, "item-1", "source-1")
+		results <- result{principal, resolved, reason}
+	}
+	first, second := fixturePrincipal(), fixturePrincipal()
+	second.DeviceID = "device-2"
+	go resolve(first, context.Background())
+	<-started
+	waiter := &playbackFlightWaitContext{Context: context.Background(), joined: make(chan struct{})}
+	go resolve(second, waiter)
+	<-waiter.joined
+	gateway.playbackInfoFlights.mu.Lock()
+	inflight := len(gateway.playbackInfoFlights.calls)
+	for key := range gateway.playbackInfoFlights.calls {
+		if strings.Contains(key, fixtureAccessToken) {
+			t.Error("flight key retained plaintext token")
+		}
+	}
+	gateway.playbackInfoFlights.mu.Unlock()
+	close(release)
+	completed := make([]result, 0, 2)
+	for range 2 {
+		completed = append(completed, <-results)
+	}
+	for _, got := range completed {
+		proof, ok := gateway.proofs.Lookup(got.principal.MappingID, "item-1", "source-1", got.resolved.PlaySessionID)
+		if got.reason != "" || got.resolved.PlaySessionID != "session-"+got.principal.DeviceID || !ok || !playbackProofMatchesPrincipal(proof, got.principal) {
+			t.Errorf("device=%s reason=%s session=%s matchingProof=%t", got.principal.DeviceID, got.reason, got.resolved.PlaySessionID, ok && playbackProofMatchesPrincipal(proof, got.principal))
+		}
+		request := httptest.NewRequest(http.MethodGet, "/Videos/item-1/stream?MediaSourceId=source-1&Static=true", nil)
+		request.Header.Set("X-Emby-Device-Id", got.principal.DeviceID)
+		reused, reason := gateway.resolvePlaybackInfoOnDemand(request, got.principal, fixtureAccessToken, "item-1", "source-1")
+		if reason != "" || reused.PlaySessionID != got.resolved.PlaySessionID {
+			t.Errorf("device=%s failed own-proof reuse: reason=%s", got.principal.DeviceID, reason)
+		}
+	}
+	if inflight != 2 || calls.Load() != 2 {
+		t.Fatalf("separate device flights=%d HTTP calls=%d", inflight, calls.Load())
+	}
+}
+
+// TestPlaybackInfoFlightKeySeparatesDeviceAndToken locks both new dimensions
+// while confirming identical requests can still coalesce without raw tokens.
+func TestPlaybackInfoFlightKeySeparatesDeviceAndToken(t *testing.T) {
+	principal := fixturePrincipal()
+	key := playbackInfoFlightKey(principal, "item-1", "source-1", fixtureAccessToken)
+	if key != playbackInfoFlightKey(principal, "item-1", "source-1", fixtureAccessToken) {
+		t.Fatal("identical requests cannot share a flight")
+	}
+	other := principal
+	other.DeviceID = "device-2"
+	if key == playbackInfoFlightKey(other, "item-1", "source-1", fixtureAccessToken) ||
+		key == playbackInfoFlightKey(principal, "item-1", "source-1", "other-fixture-token") || strings.Contains(key, fixtureAccessToken) {
+		t.Fatal("flight key failed device/credential isolation or retained plaintext token")
+	}
+}
 
 func TestOnDemandPlaybackInfoFlightGroupCoalescesConcurrentRequests(t *testing.T) {
 	group := &onDemandPlaybackInfoFlightGroup{}
@@ -190,7 +284,7 @@ func TestResolvePlaybackInfoOnDemandInvalidatesStaleItemProofsWithoutNewDirectPl
 			t.Fatalf("logs=%q, want %s", logs.String(), expected)
 		}
 	}
-	if _, ok := gateway.proofs.LookupLatestMediaSource("mapping-1", "item-1", "source-stale"); ok {
+	if _, ok := gateway.proofs.LookupLatestMediaSource(fixturePrincipal(), "item-1", "source-stale"); ok {
 		t.Fatal("stale proof survived a newer authoritative PlaybackInfo response")
 	}
 }
