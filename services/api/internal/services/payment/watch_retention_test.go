@@ -3,32 +3,33 @@ package payment
 import (
 	"github.com/konghang/ember/backend/internal/models"
 	"testing"
-	"time"
 )
 
-// TestWatchRetentionConfiguration resets grace only for meaningful enabled policy changes.
+// TestWatchRetentionConfiguration validates complete rules and preserves configuration on invalid edits.
 func TestWatchRetentionConfiguration(t *testing.T) {
-	now := time.Now()
 	enabled := true
 	days := 14
 	minutes := 60
 	group := models.PlanGroup{WatchRetentionDays: 30}
-	if err := applyWatchRetentionPolicy(&group, &enabled, &days, &minutes, now); err != nil {
+	if err := applyWatchRetentionPolicy(&group, &enabled, &days, &minutes); err != nil {
 		t.Fatal(err)
 	}
-	if group.WatchRetentionResetAt == nil || !group.WatchRetentionResetAt.Equal(now) {
-		t.Fatal("no reset")
-	}
-	later := now.Add(time.Hour)
-	if err := applyWatchRetentionPolicy(&group, &enabled, &days, &minutes, later); err != nil || !group.WatchRetentionResetAt.Equal(now) {
-		t.Fatal("unchanged config reset")
+	if !group.WatchRetentionEnabled || group.WatchRetentionDays != days || group.WatchRetentionMinMinutes != minutes {
+		t.Fatalf("rule not applied: %+v", group)
 	}
 	days = 15
-	if err := applyWatchRetentionPolicy(&group, nil, &days, nil, later); err != nil || !group.WatchRetentionResetAt.Equal(later) {
-		t.Fatal("change did not reset")
+	if err := applyWatchRetentionPolicy(&group, nil, &days, nil); err != nil || group.WatchRetentionDays != days {
+		t.Fatalf("period not changed: %+v err=%v", group, err)
 	}
 	minutes = 0
-	if err := applyWatchRetentionPolicy(&group, nil, nil, &minutes, later); err == nil {
+	if err := applyWatchRetentionPolicy(&group, nil, nil, &minutes); err == nil {
 		t.Fatal("accepted enabled zero")
+	}
+	if group.WatchRetentionMinMinutes != 60 {
+		t.Fatal("invalid edit changed the persisted rule")
+	}
+	enabled = false
+	if err := applyWatchRetentionPolicy(&group, &enabled, nil, &minutes); err != nil || group.WatchRetentionEnabled {
+		t.Fatalf("disable failed: %+v err=%v", group, err)
 	}
 }

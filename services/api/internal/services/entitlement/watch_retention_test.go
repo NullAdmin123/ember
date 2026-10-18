@@ -73,17 +73,24 @@ func TestRegisterRetentionScheduleSuspendsUnsupportedSettings(t *testing.T) {
 	}
 }
 
-// TestRetentionPolicyResetAndSnapshot covers paused/restarted grants and stale query rejection.
-func TestRetentionPolicyResetAndSnapshot(t *testing.T) {
+// TestRetentionActivationAndSnapshot keeps rule changes from replacing a holding's actual start.
+func TestRetentionActivationAndSnapshot(t *testing.T) {
 	now := time.Now()
 	old := now.AddDate(0, 0, -10)
 	holding := models.UserEntitlement{WatchRetentionStartedAt: &old}
-	group := models.PlanGroup{Key: "A", WatchRetentionResetAt: &now, WatchRetentionDays: 30, WatchRetentionMinMinutes: 60}
-	if !RetentionStart(holding, group).Equal(now) {
-		t.Fatal("policy did not restart period")
+	group := models.PlanGroup{Key: "A", WatchRetentionDays: 30, WatchRetentionMinMinutes: 60}
+	if !RetentionStart(holding).Equal(old) {
+		t.Fatal("policy replaced the entitlement's actual start")
+	}
+	if RetentionStart(models.UserEntitlement{}) != nil {
+		t.Fatal("policy invented a start for a legacy holding")
+	}
+	zero := time.Time{}
+	if RetentionStart(models.UserEntitlement{WatchRetentionStartedAt: &zero}) != nil {
+		t.Fatal("zero activation became eligible")
 	}
 	holding.WatchRetentionInvalidatedAt = &old
-	if RetentionStart(holding, group) != nil {
+	if RetentionStart(holding) != nil {
 		t.Fatal("policy revived invalidated grant")
 	}
 	a := &retentionSnapshot{User: models.User{EmbyID: "emby"}, Group: group, Start: now}

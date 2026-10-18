@@ -675,9 +675,9 @@ MediaGapScan                    （缺集扫描持久化记录，advisory lock �
 
 ## 观看保号数据补充
 
-`plan_groups` 新增 `watch_retention_enabled`（默认 false）、`watch_retention_days`（默认 30）、`watch_retention_min_minutes`（默认 0，开启须正数）三项配置；内部 `watch_retention_reset_at` 标记最近启用/规则变化时间。`user_entitlements` 增加 `watch_retention_started_at` 与 `watch_retention_invalidated_at`，分别记录本轮实际接替及失效；永久期限不再等于无条件有效。`watch_retention_checks` 保存窗口、门槛、累计秒数和判定，用户删除时级联删除，不依赖当前分组仍存在。
+`plan_groups` 新增 `watch_retention_enabled`（默认 false）、`watch_retention_days`（默认 30）、`watch_retention_min_minutes`（默认 0，开启须正数）三项配置；`20261018_01_remove_watch_retention_reset.sql` 已删除内部 `watch_retention_reset_at`，分组配置变化不再覆盖权益起点。`user_entitlements` 增加 `watch_retention_started_at` 与 `watch_retention_invalidated_at`，分别记录本轮实际接替及失效；永久期限不再等于无条件有效。`watch_retention_checks` 保存窗口、门槛、累计秒数和判定，用户删除时级联删除，不依赖当前分组仍存在。
 
-迁移为 `20261008_01_watch_retention.sql`，可重复执行，默认关闭且不回填历史失效；完整流转见[运行手册](../runbooks/watch-retention.md)。
+最初迁移为 `20261008_01_watch_retention.sql`，后续前向删除重开列并替换分组约束；旧 SQL 不改写，删除迁移可重复执行且不改用户权益和历史考核记录。起点缺失保持为空、跳过考核并记录原因；完整流转见[运行手册](../runbooks/watch-retention.md)。
 
 `20261011_01_watch_retention_scan_progress.sql` 新增 `watch_retention_scan_states`：`user_id` 为主键并关联用户删除级联，`last_attempt_at` 为最近扫描尝试时间。每用户最多一条，独立于权益和考核审计；失败或中断也更新进度，使下轮优先覆盖尚未触达用户。无历史回填，重复迁移不清空进度。
 

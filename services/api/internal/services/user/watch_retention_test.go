@@ -55,3 +55,31 @@ func TestWatchRetentionSuspendedScheduleKeepsEntitlementsReadable(t *testing.T) 
 		}
 	}
 }
+
+// TestWatchRetentionRuleChangesKeepActivation verifies that current rules recalculate dates from the original clock.
+func TestWatchRetentionRuleChangesKeepActivation(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	start := time.Date(2026, 9, 1, 15, 0, 0, 0, loc)
+	now := time.Date(2026, 10, 19, 2, 0, 0, 0, loc)
+	for _, tc := range []struct {
+		name          string
+		days, minutes int
+		state         string
+		first         time.Time
+	}{
+		{"enabled_mature_holding", 30, 5, "checking", time.Date(2026, 10, 2, 2, 0, 0, 0, loc)},
+		{"new_minute_threshold", 30, 90, "checking", time.Date(2026, 10, 2, 2, 0, 0, 0, loc)},
+		{"shorter_period", 14, 5, "checking", time.Date(2026, 9, 16, 2, 0, 0, 0, loc)},
+		{"longer_period", 60, 5, "grace", time.Date(2026, 11, 1, 2, 0, 0, 0, loc)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := EntitlementView{UserEntitlement: models.UserEntitlement{ValidityType: "permanent", WatchRetentionStartedAt: &start}, RetentionEnabled: true, RetentionDays: tc.days, RetentionMinutes: tc.minutes, Current: true}
+			if err := attachWatchRetentionView(&row, now, "0 2 * * *", loc, true); err != nil {
+				t.Fatal(err)
+			}
+			if row.WatchRetention.State != tc.state || row.WatchRetention.FirstCheckAt == nil || !row.WatchRetention.FirstCheckAt.Equal(tc.first) || row.WatchRetention.MinMinutes != tc.minutes || !row.WatchRetentionStartedAt.Equal(start) {
+				t.Fatalf("rule change moved activation or advertised wrong check: %+v", row)
+			}
+		})
+	}
+}

@@ -27,8 +27,8 @@
 
 | 当前事实 | 证据入口 |
 | --- | --- |
-| 分组已有观看开关、周期、分钟门槛及内部重开时间 | `services/api/internal/models/plan_group.go` |
-| 当前修改周期或分钟门槛会重开考核，和本计划的新口径不同 | `services/api/internal/services/payment/watch_retention.go`、对应测试 |
+| 分组已有观看开关、周期、分钟门槛；内部重开时间已在 2026-10-18 独立修复中移除 | `services/api/internal/models/plan_group.go` |
+| 2026-10-18 已独立实现配置变更保留原权益起点；本计划的首次日期持久化仍待实施 | `services/api/internal/services/payment/watch_retention.go`、对应测试 |
 | 权益目前仅保存考核起点和失效时间；接口 `firstCheckAt` 动态计算，未单独持久化首次检查日期 | `services/api/internal/models/entitlement.go`、`services/api/internal/services/user/entitlements.go`、`services/api/internal/services/entitlement/watch_retention.go` |
 | 保号 worker 目前只比较观看时长，事务内复核后写审计及失效状态 | `services/api/internal/services/entitlement/watch_retention_worker.go` |
 | 只考核当前生效组；其他有效组实际接替时开始完整周期 | `services/api/internal/services/entitlement/store.go`、[运行手册](../../runbooks/watch-retention.md) |
@@ -37,7 +37,7 @@
 | Bot 已有绑定、账号查询、群消息及 Internal API 通信，但尚无本计划签到入口 | `services/bot/app/server.py`、`services/bot/app/handlers/telegram_handler.py` |
 | 观看协议基线为 Emby 4.9.3.0、Playback Reporting 2.1.0.7 | [版本化 API 合同](../../reference/playback-reporting-api-contract.md) |
 
-本计划是后续增量方案。旧计划和运行手册暂时继续记录现行行为，不提前改成已实现的新规则。
+本计划是后续增量方案。2026-10-18 已单独实现“配置变化不重置原起点”并同步现行观看保号计划与运行手册；本计划其余签到、双途径判定和首次日期持久化仍未实现。
 
 ## 已确认的产品规则
 
@@ -92,7 +92,7 @@
 
 例如，起点为 10 月 1 日 00:00，实际调度为每天 02:00：N=30 时首次检查为 10 月 31 日 02:00；10 月 10 日将 N 改为 7 后，首次检查记录更新为 10 月 8 日 02:00，起点仍为 10 月 1 日。由于新日期已到，下一次正常调度即可检查，不回溯执行遗漏批次，也不延后至 10 月 17 日。日期均为业务时区，数字仅用于解释规则。
 
-实施必须替换当前“修改门槛更新重开时间”的行为，新增首次检查日期持久化并迁移相应特征测试。现行实现尚未具备这套完整行为，不能将接口已有 `firstCheckAt` 表述为权益表已保存该字段。
+配置变化保留权益起点已由 2026-10-18 独立修复完成；本计划实施时仍须新增首次检查日期持久化及迁移测试。当前 `firstCheckAt` 继续动态计算，不能表述为权益表已保存该字段。
 
 ### 5. 群内回应与私聊状态
 
@@ -188,7 +188,7 @@ flowchart TD
 
 ## 验证方式
 
-实施采用 TDD，先补现状特征测试，再修改门槛重开和双条件判定。外部依赖必须 mock。
+实施采用 TDD，先补现状特征测试，再实现首次日期持久化和双条件判定，保留配置变化不重置起点的现有规则。外部依赖必须 mock。
 
 | 场景 | 预期 |
 | --- | --- |

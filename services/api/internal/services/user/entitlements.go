@@ -27,7 +27,6 @@ type EntitlementView struct {
 	RetentionEnabled bool                `json:"-" gorm:"column:retention_enabled"`
 	RetentionDays    int                 `json:"-" gorm:"column:retention_days"`
 	RetentionMinutes int                 `json:"-" gorm:"column:retention_minutes"`
-	RetentionResetAt *time.Time          `json:"-" gorm:"column:retention_reset_at"`
 	Current          bool                `json:"isCurrent" gorm:"column:is_current"`
 	models.UserEntitlement
 	PlanGroupName string `json:"planGroupName" gorm:"column:plan_group_name"`
@@ -46,7 +45,7 @@ type AdjustEntitlementRequest struct {
 // GetEntitlements returns all grants, including expired ones, for account and administrator displays.
 func (s *UserService) GetEntitlements(ctx context.Context, userID string) ([]EntitlementView, error) {
 	rows := []EntitlementView{}
-	err := db.DB.WithContext(ctx).Table("user_entitlements AS e").Select("e.*, g.name AS plan_group_name, g.watch_retention_enabled AS retention_enabled, g.watch_retention_days AS retention_days, g.watch_retention_min_minutes AS retention_minutes, g.watch_retention_reset_at AS retention_reset_at, (u.resource_access_granted AND u.plan_group = e.plan_group) AS is_current").Joins("JOIN plan_groups g ON g.key = e.plan_group").Joins("JOIN users u ON u.id = e.user_id").Where("e.user_id = ?", userID).Order("g.entitlement_rank DESC NULLS LAST, e.plan_group").Scan(&rows).Error
+	err := db.DB.WithContext(ctx).Table("user_entitlements AS e").Select("e.*, g.name AS plan_group_name, g.watch_retention_enabled AS retention_enabled, g.watch_retention_days AS retention_days, g.watch_retention_min_minutes AS retention_minutes, (u.resource_access_granted AND u.plan_group = e.plan_group) AS is_current").Joins("JOIN plan_groups g ON g.key = e.plan_group").Joins("JOIN users u ON u.id = e.user_id").Where("e.user_id = ?", userID).Order("g.entitlement_rank DESC NULLS LAST, e.plan_group").Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +91,7 @@ func attachWatchRetentionView(row *EntitlementView, now time.Time, schedule stri
 	if !row.Current {
 		return nil
 	}
-	start := entitlementpkg.RetentionStart(row.UserEntitlement, models.PlanGroup{WatchRetentionResetAt: row.RetentionResetAt})
+	start := entitlementpkg.RetentionStart(row.UserEntitlement)
 	if start == nil {
 		return nil
 	}

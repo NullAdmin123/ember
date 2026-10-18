@@ -249,3 +249,12 @@ Web 使用 `npm run test` 覆盖 `watch-retention`、分组表单、概览和持
 - `TestPolicyTaskTerminalLogRequiresPersistedResult` 覆盖 synced/failed 终态、旧任务被替换、更新及提交失败；`TestImmediatePolicySyncWithoutClaimDoesNotLogSuccess` 确认未领取任务不报同步成功。终态日志不输出原始上游错误内容。
 
 Go 全量非集成测试、`go vet ./...`、`go build ./...` 及 `entitlement/policy` 两包竞态测试通过。本次不改 API 合同、数据库 schema 或 Web；未触发真实外部链路，既有专用 PostgreSQL 与浏览器证据不扩展为本轮线上日志已实测。线上观察入口与字段含义见[观看保号运行手册](./watch-retention.md#线上日志观察)。
+
+
+### 观看保号起点规则回归（2026-10-18）
+
+API 全量非数据库测试、vet/build 和 entitlement/payment/user/system 四包 race 通过。先用失败用例锁定“开启分组不能覆盖成熟权益起点”，再移除分组重开字段；缺失／零值起点跳过并记录固定原因，不查询真实播放或写失效。
+
+专用 PostgreSQL 的隔离 schema 已运行 `go test ./internal/app -run '^TestIntegrationWatchRetention' -count=1 -timeout=180s -v`，6 项顶层用例全部通过、零跳过。新增 `TestIntegrationWatchRetentionRuleChangesKeepStart` 覆盖真实分组更新和权益 DTO；`TestIntegrationWatchRetentionResetRemoval` 覆盖 fresh/upgrade/replay、原起点/失效/审计保留、空值不回填、正数门槛约束及新增启用分组。既有恢复、公平扫描和生命周期用例同步通过，所有 Emby/播放/Policy 依赖为 fake。
+
+Web 定向运行 `npm run test -- src/utils/watch-retention.spec.ts src/views/console/DashboardView.spec.ts src/components/billing/UserEntitlementsPanel.spec.ts --maxWorkers=2`，13 项通过；本轮未修改 Web 源码。未启动项目服务、未操作线上业务数据，真实播放器和浏览器验收未执行。

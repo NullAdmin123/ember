@@ -16,6 +16,7 @@
 - `20260929_01_playback_ranking_batches.sql`：排行榜批次表与周期唯一键、历史批次回填、明细位置唯一键和批次外键；移除错误的明细周期唯一索引，历史总时长保留 NULL
 - `20261004_01_plan_group_entitlements.sql`：单组商品显式有效期、用户独立权益、订单快照与人工处理；未发布阶段按用户确认原地收敛商品结构，已执行旧测试稿的库须按 [权益升级手册](../../docs/runbooks/entitlements-upgrade.md) 先转换并校验，不能仅改 checksum
 - `20261005_01_redemption_permanent_validity.sql`：兑换码与兑换历史显式有效期类型，旧记录保留 duration，永久码零天约束及启动指纹
+- `20261018_01_remove_watch_retention_reset.sql`：删除分组保号重开时间，替换规则校验约束，不改用户权益起点、失效或历史审计
 - `archive/`：仅供追溯，不参与任何运行时链路
 
 当前升级支持窗口：
@@ -200,3 +201,7 @@ baseline 必须与运行库 schema **字段级等价**，且与 `services/api/in
 ## 2026-10-11 观看保号扫描进度
 
 `20261011_01_watch_retention_scan_progress.sql` 新建 `watch_retention_scan_states(user_id, last_attempt_at)`，每用户一条最近尝试记录，用户删除时级联清理。用于在任务取消、超时或重启后优先处理尚未触达用户，不改权益或判定审计。无历史回填，可重复执行且保留已有进度；模型、表检查与启动指纹已同步。已在专用 PostgreSQL 隔离 schema 验证迁移重放和跨轮推进，未在业务 schema 执行。
+
+## 2026-10-18 取消分组保号重开
+
+`20261018_01_remove_watch_retention_reset.sql` 替换 `plan_groups_watch_retention_valid` 并删除 `plan_groups.watch_retention_reset_at`，保留周期和门槛取值校验；可重复执行，不回填或改写权益起点、失效和考核记录。原迁移保持 checksum 不变。实际生效／接替时间是唯一考核起点，历史空值跳过并由日志指出。升级前停止旧 API/Gateway，再运行同版镜像的启动迁移；迁移后旧镜像不能直接回滚使用，回滚须恢复兼容 schema 或升级前备份。此删除型迁移没有新增列或索引指纹，由迁移记账、checksum 及 PostgreSQL fresh/upgrade/replay 用例验证。

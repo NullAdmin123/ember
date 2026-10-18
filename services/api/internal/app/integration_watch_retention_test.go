@@ -20,7 +20,7 @@ func TestIntegrationWatchRetentionLifecycle(t *testing.T) {
 	now := time.Date(2026, 10, 8, 15, 0, 0, 0, loc)
 	a := "DEFAULT"
 	rankA, rankB := 10, 20
-	if err := h.database.Model(&models.PlanGroup{}).Where("key = ?", a).Updates(map[string]interface{}{"entitlement_rank": rankA, "watch_retention_enabled": true, "watch_retention_days": 30, "watch_retention_min_minutes": 60, "watch_retention_reset_at": now}).Error; err != nil {
+	if err := h.database.Model(&models.PlanGroup{}).Where("key = ?", a).Updates(map[string]interface{}{"entitlement_rank": rankA, "watch_retention_enabled": true, "watch_retention_days": 30, "watch_retention_min_minutes": 60}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := h.database.Create(&models.PlanGroup{Key: "PAID", Name: "Paid", EntitlementRank: &rankB}).Error; err != nil {
@@ -87,6 +87,14 @@ func TestIntegrationWatchRetentionLifecycle(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		if err := h.database.Exec(string(sql)).Error; err != nil {
+			t.Fatal(err)
+		}
+		// Replaying historical DDL may recreate a removed column; restore the latest schema afterwards.
+		currentSQL, err := os.ReadFile(filepath.Join(integrationMigrationsDir(t), "20261018_01_remove_watch_retention_reset.sql"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.database.Exec(string(currentSQL)).Error; err != nil {
 			t.Fatal(err)
 		}
 	}

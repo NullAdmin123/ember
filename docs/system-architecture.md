@@ -1062,7 +1062,8 @@ Telegram 账号绑定与 Bot 自助能力服务。
 
 ### 10.1 分组观看保号
 
-- 分组三项配置为 `watchRetentionEnabled/watchRetentionDays/watchRetentionMinMinutes`；默认关闭，观察期与统计窗口共用周期，默认 30 天。`UserEntitlement` 保存本轮实际接替起点及保号失效时间，分组内部重开时间处理规则变更，不重复配置用户级门槛。
+- 分组三项配置为 `watchRetentionEnabled/watchRetentionDays/watchRetentionMinMinutes`；默认关闭，观察期与统计窗口共用周期，默认 30 天。`UserEntitlement` 保存本轮实际接替起点及保号失效时间，考核只使用该权益起点；开启、重新开启或修改分组规则不重开周期，不重复配置用户级门槛。修改 N 时按原起点和新的 N 重算首次日期，修改分钟门槛不改变日期。
+- `20261018_01_remove_watch_retention_reset.sql` 删除分组重开列并替换校验约束，不回填或改写用户权益起点、失效及审计。旧镜像仍依赖被删列，升级须先停止旧 API/Gateway 再启用同版镜像，不能直接回滚旧版 API。历史权益起点缺失时跳过并记录 `reason=missing_entitlement_start`，不从注册、表记录创建或迁移时间猜测。
 - 分组表单将未配置或为零的分钟门槛展示为空白，开启保号后须明确填写正整数才能保存；关闭时空值按接口约定提交为 `0`，已有正数门槛在切换开关时保留。
 - `WATCH_RETENTION_SCHEDULE` 为设置中心可配置的日历 cron，默认 `0 2 * * *`，受 `CRON_ENABLED` 控制并统一使用 `CRON_TIMEZONE`，重启 API 后生效。保存、运行期注册和首次日期计算共用校验，拒绝 `@every`；已有不支持的配置暂停保号并记录修正提示，权益仍可读取且不显示检查日期。只考核当前生效权益；被其他组替代时暂停，重新接替时重开完整周期。关闭保号不恢复已失效权益。
 - `WatchRetentionWorker` 在事务外调用固定版本 Playback Reporting 聚合电影/剧集累计秒数，事务内重查用户/组/起点后写入审计、失效标记、访问投影及待同步 Policy 任务。提交后按用户立即消费任务；中断由既有 Policy worker 补偿，外部失败保留 failed 记录供管理员重试。替换已有活跃任务时换新任务 ID、保留批次关系，旧 worker 不能关闭新意图。查询故障不按零处理；没有任何有效权益才停用资源访问，不解除人工限制。

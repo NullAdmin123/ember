@@ -13,9 +13,65 @@ import (
 // expectRetentionSnapshot supplies current server-side state without any external calls.
 func expectRetentionSnapshot(mock sqlmock.Sqlmock, at time.Time, enabled bool) {
 	mock.ExpectQuery(`SELECT .*users`).WithArgs("u1", 1).WillReturnRows(sqlmock.NewRows([]string{"id", "role", "plan_group", "resource_access_granted", "emby_id"}).AddRow("u1", "user", "A", true, "emby"))
-	mock.ExpectQuery(`SELECT .*plan_groups`).WithArgs("A", 1).WillReturnRows(sqlmock.NewRows([]string{"key", "watch_retention_enabled", "watch_retention_days", "watch_retention_min_minutes", "watch_retention_reset_at"}).AddRow("A", enabled, 30, 60, at))
+	mock.ExpectQuery(`SELECT .*plan_groups`).WithArgs("A", 1).WillReturnRows(sqlmock.NewRows([]string{"key", "watch_retention_enabled", "watch_retention_days", "watch_retention_min_minutes"}).AddRow("A", enabled, 30, 60))
 	if enabled {
 		mock.ExpectQuery(`SELECT .*user_entitlements`).WithArgs("u1", "A", 1).WillReturnRows(sqlmock.NewRows([]string{"user_id", "plan_group", "validity_type", "watch_retention_started_at"}).AddRow("u1", "A", "permanent", at))
+	}
+}
+
+// TestRetentionUsesEntitlementStartAfterRuleChange checks the original clock and rolling window after enabling a mature group.
+func TestRetentionUsesEntitlementStartAfterRuleChange(t *testing.T) {
+	database, mock := mockDatabase(t)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	started := time.Date(2026, 9, 1, 15, 0, 0, 0, loc)
+	enabled := time.Date(2026, 10, 18, 17, 38, 0, 0, loc)
+	at := time.Date(2026, 10, 19, 2, 0, 0, 0, loc)
+	mock.ExpectQuery(`SELECT .*users.*JOIN plan_groups`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("u1"))
+	mock.ExpectExec(`INSERT INTO watch_retention_scan_states`).WithArgs("u1", at).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT .*users`).WithArgs("u1", 1).WillReturnRows(sqlmock.NewRows([]string{"id", "role", "plan_group", "resource_access_granted", "emby_id"}).AddRow("u1", "user", "A", true, "emby"))
+	// The obsolete column must never override the holding, even while reading an old schema.
+	mock.ExpectQuery(`SELECT .*plan_groups`).WithArgs("A", 1).WillReturnRows(sqlmock.NewRows([]string{"key", "watch_retention_enabled", "watch_retention_days", "watch_retention_min_minutes", "watch_retention_reset_at"}).AddRow("A", true, 30, 5, enabled))
+	mock.ExpectQuery(`SELECT .*user_entitlements`).WithArgs("u1", "A", 1).WillReturnRows(sqlmock.NewRows([]string{"user_id", "plan_group", "validity_type", "watch_retention_started_at"}).AddRow("u1", "A", "permanent", started))
+	queried := false
+	worker := WatchRetentionWorker{DB: database, Location: loc, Schedule: "0 2 * * *", Query: func(_ context.Context, id string, from, until time.Time, location *time.Location) (int64, error) {
+		queried = true
+		if id != "emby" || !from.Equal(at.AddDate(0, 0, -30)) || !until.Equal(at) || location != loc {
+			t.Fatalf("wrong rolling window: %s %s %s %v", id, from, until, location)
+		}
+		// Keep this eligibility regression isolated from writes and external playback statistics.
+		return 0, errors.New("fixture: unavailable playback evidence")
+	}}
+	if err := worker.Run(context.Background(), at); err == nil || !queried {
+		t.Fatalf("mature entitlement was deferred after enabling the rule: queried=%t err=%v", queried, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRetentionMissingActivationSkipsWithEvidence prevents legacy unknown clocks from becoming zero-viewing decisions.
+func TestRetentionMissingActivationSkipsWithEvidence(t *testing.T) {
+	output := captureRetentionLogs(t)
+	database, mock := mockDatabase(t)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	at := time.Date(2026, 10, 19, 2, 0, 0, 0, loc)
+	mock.ExpectQuery(`SELECT .*users.*JOIN plan_groups`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("u1"))
+	mock.ExpectExec(`INSERT INTO watch_retention_scan_states`).WithArgs("u1", at).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT .*users`).WithArgs("u1", 1).WillReturnRows(sqlmock.NewRows([]string{"id", "role", "plan_group", "resource_access_granted", "emby_id"}).AddRow("u1", "user", "A", true, "emby"))
+	mock.ExpectQuery(`SELECT .*plan_groups`).WithArgs("A", 1).WillReturnRows(sqlmock.NewRows([]string{"key", "watch_retention_enabled", "watch_retention_days", "watch_retention_min_minutes"}).AddRow("A", true, 30, 5))
+	mock.ExpectQuery(`SELECT .*user_entitlements`).WithArgs("u1", "A", 1).WillReturnRows(sqlmock.NewRows([]string{"user_id", "plan_group", "validity_type", "watch_retention_started_at"}).AddRow("u1", "A", "permanent", nil))
+	worker := WatchRetentionWorker{DB: database, Location: loc, Query: func(context.Context, string, time.Time, time.Time, *time.Location) (int64, error) {
+		t.Fatal("missing activation queried playback")
+		return 0, nil
+	}}
+	if err := worker.Run(context.Background(), at); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "reason=missing_entitlement_start") || !strings.Contains(output.String(), "skippedInactive=1") || strings.Contains(output.String(), "考核完成") {
+		t.Fatalf("missing clock not explicitly skipped: %s", output.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -47,7 +103,7 @@ func TestRetentionInvalidationAndRollback(t *testing.T) {
 			db, mock := mockDatabase(t)
 			start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 			at := start.AddDate(0, 0, 31)
-			old := &retentionSnapshot{User: models.User{ID: "u1", EmbyID: "emby"}, Group: models.PlanGroup{Key: "A", WatchRetentionDays: 30, WatchRetentionMinMinutes: 60, WatchRetentionResetAt: &start}, Holding: models.UserEntitlement{ValidityType: Permanent}, Start: start}
+			old := &retentionSnapshot{User: models.User{ID: "u1", EmbyID: "emby"}, Group: models.PlanGroup{Key: "A", WatchRetentionDays: 30, WatchRetentionMinMinutes: 60}, Holding: models.UserEntitlement{ValidityType: Permanent}, Start: start}
 			mock.ExpectBegin()
 			expectRetentionSnapshot(mock, start, true)
 			mock.ExpectExec(`INSERT INTO "watch_retention_checks"`).WillReturnResult(sqlmock.NewResult(0, 1))

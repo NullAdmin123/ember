@@ -62,12 +62,11 @@ var (
 	paymentSavePlanGroup = func(tx *gorm.DB, group *models.PlanGroup) error {
 		return tx.Model(&models.PlanGroup{}).
 			Where("key = ?", group.Key).
-			Select("watch_retention_enabled", "watch_retention_days", "watch_retention_min_minutes", "watch_retention_reset_at", "name", "description", "sort_order", "subscription_auto_approve_daily_limit", "p115_playback_mode", "p115_transfer_hourly_limit", "p115_transfer_daily_limit", "updated_at").
+			Select("watch_retention_enabled", "watch_retention_days", "watch_retention_min_minutes", "name", "description", "sort_order", "subscription_auto_approve_daily_limit", "p115_playback_mode", "p115_transfer_hourly_limit", "p115_transfer_daily_limit", "updated_at").
 			Updates(map[string]any{
 				"watch_retention_enabled":               group.WatchRetentionEnabled,
 				"watch_retention_days":                  group.WatchRetentionDays,
 				"watch_retention_min_minutes":           group.WatchRetentionMinMinutes,
-				"watch_retention_reset_at":              group.WatchRetentionResetAt,
 				"name":                                  group.Name,
 				"description":                           group.Description,
 				"sort_order":                            group.SortOrder,
@@ -451,7 +450,7 @@ func (s *PaymentService) CreatePlanGroup(req *CreatePlanGroupRequest) (*PlanGrou
 		MediaLibraryTemplateVersion:       1,
 	}
 
-	if err := applyWatchRetentionPolicy(&group, req.WatchRetentionEnabled, req.WatchRetentionDays, req.WatchRetentionMinMinutes, time.Now()); err != nil {
+	if err := applyWatchRetentionPolicy(&group, req.WatchRetentionEnabled, req.WatchRetentionDays, req.WatchRetentionMinMinutes); err != nil {
 		rollbackPlanGroupTx(tx)
 		return nil, err
 	}
@@ -545,7 +544,7 @@ func (s *PaymentService) UpdatePlanGroup(key string, req *UpdatePlanGroupRequest
 		}
 	}
 
-	if err := applyWatchRetentionPolicy(group, req.WatchRetentionEnabled, req.WatchRetentionDays, req.WatchRetentionMinMinutes, time.Now()); err != nil {
+	if err := applyWatchRetentionPolicy(group, req.WatchRetentionEnabled, req.WatchRetentionDays, req.WatchRetentionMinMinutes); err != nil {
 		rollbackPlanGroupTx(tx)
 		return nil, err
 	}

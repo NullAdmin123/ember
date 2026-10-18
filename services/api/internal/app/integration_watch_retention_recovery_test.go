@@ -36,11 +36,14 @@ func seedRetentionRecoveryUser(t *testing.T, h *integrationHarness, id string) (
 	group := "DEFAULT"
 	if err := h.database.Model(&models.PlanGroup{}).Where("key = ?", group).Updates(map[string]any{
 		"entitlement_rank": 20, "watch_retention_enabled": true, "watch_retention_days": 30,
-		"watch_retention_min_minutes": 60, "watch_retention_reset_at": start,
+		"watch_retention_min_minutes": 60,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	user := h.seedUser(t, models.User{ID: id, Username: id, Email: id + "@example.com", PlanGroup: &group, EmbyID: id})
+	if err := h.database.Model(&models.UserEntitlement{}).Where("user_id = ? AND plan_group = ?", user.ID, group).Update("watch_retention_started_at", start).Error; err != nil {
+		t.Fatal(err)
+	}
 	return user, start.AddDate(0, 0, 31), loc
 }
 

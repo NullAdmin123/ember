@@ -43,16 +43,12 @@ type retentionRunStats struct {
 	skippedDuplicate, syncRequested, syncDispatchFailed           int
 }
 
-// RetentionStart applies a group policy reset without reviving invalidated grants.
-func RetentionStart(holding models.UserEntitlement, group models.PlanGroup) *time.Time {
-	if holding.WatchRetentionInvalidatedAt != nil {
+// RetentionStart uses only a holding's actual activation; missing clocks and invalidated grants are not eligible.
+func RetentionStart(holding models.UserEntitlement) *time.Time {
+	if holding.WatchRetentionInvalidatedAt != nil || holding.WatchRetentionStartedAt == nil || holding.WatchRetentionStartedAt.IsZero() {
 		return nil
 	}
-	start := holding.WatchRetentionStartedAt
-	if group.WatchRetentionResetAt != nil && (start == nil || group.WatchRetentionResetAt.After(*start)) {
-		start = group.WatchRetentionResetAt
-	}
-	return start
+	return holding.WatchRetentionStartedAt
 }
 
 // Run examines current groups and reports committed outcomes and skips for this checkedAt.
@@ -209,8 +205,11 @@ func (w *WatchRetentionWorker) snapshot(ctx context.Context, id string, locked b
 	if err := q.Where("user_id = ? AND plan_group = ?", user.ID, group.Key).First(&holding).Error; err != nil {
 		return nil, err
 	}
-	start := RetentionStart(holding, group)
+	start := RetentionStart(holding)
 	if start == nil {
+		if holding.WatchRetentionInvalidatedAt == nil {
+			log.Printf("[WatchRetention] 考核起点缺失，跳过用户 userId=%s group=%s reason=missing_entitlement_start", user.ID, group.Key)
+		}
 		return nil, nil
 	}
 	return &retentionSnapshot{User: user, Holding: holding, Group: group, Start: *start}, nil
@@ -218,7 +217,7 @@ func (w *WatchRetentionWorker) snapshot(ctx context.Context, id string, locked b
 
 // sameRetentionSnapshot rejects query results made stale by renewal, identity change, switching or policy edits.
 func sameRetentionSnapshot(a, b *retentionSnapshot) bool {
-	return a != nil && b != nil && a.User.EmbyID == b.User.EmbyID && a.Group.Key == b.Group.Key && a.Group.WatchRetentionDays == b.Group.WatchRetentionDays && a.Group.WatchRetentionMinMinutes == b.Group.WatchRetentionMinMinutes && sameTime(a.Group.WatchRetentionResetAt, b.Group.WatchRetentionResetAt) && a.Start.Equal(b.Start) && sameTime(a.Holding.ExpiresAt, b.Holding.ExpiresAt) && a.Holding.ValidityType == b.Holding.ValidityType
+	return a != nil && b != nil && a.User.EmbyID == b.User.EmbyID && a.Group.Key == b.Group.Key && a.Group.WatchRetentionDays == b.Group.WatchRetentionDays && a.Group.WatchRetentionMinMinutes == b.Group.WatchRetentionMinMinutes && a.Start.Equal(b.Start) && sameTime(a.Holding.ExpiresAt, b.Holding.ExpiresAt) && a.Holding.ValidityType == b.Holding.ValidityType
 }
 
 // apply atomically records a still-current decision, logging completion only after its transaction commits.
