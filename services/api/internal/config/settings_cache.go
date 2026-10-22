@@ -1,6 +1,8 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -62,31 +64,41 @@ func (s *settingsCacheStore) invalidate(key string) {
 }
 
 func (s *settingsCacheStore) loadMany(keys []string, loader func([]string) (map[string]models.Setting, error)) (map[string]models.Setting, error) {
-	return s.loadManyWithPolicy(keys, settingsKeyCacheTTL, false, loader)
+	return s.loadManyWithPolicy(context.Background(), keys, settingsKeyCacheTTL, false, loader)
 }
 
 // loadManyWithTTL reuses the bounded settings cache with a caller-specific
 // freshness window. Gateway runtime switches use a short window and cache load
-// failures for the same duration, while ordinary API reads retain the broader
-// default cache and retry failures immediately.
+// storage failures for the same duration. Request cancellation and deadlines
+// never become shared errors; each caller can stop waiting independently.
 func (s *settingsCacheStore) loadManyWithTTL(
+	ctx context.Context,
 	keys []string,
 	ttl time.Duration,
 	loader func([]string) (map[string]models.Setting, error),
 ) (map[string]models.Setting, error) {
-	return s.loadManyWithPolicy(keys, ttl, true, loader)
+	return s.loadManyWithPolicy(ctx, keys, ttl, true, loader)
 }
 
+// loadManyWithPolicy combines fresh entries and generation-checked loads while
+// retaining each caller's cancellation boundary and the selected error policy.
 func (s *settingsCacheStore) loadManyWithPolicy(
+	ctx context.Context,
 	keys []string,
 	ttl time.Duration,
 	cacheErrors bool,
 	loader func([]string) (map[string]models.Setting, error),
 ) (map[string]models.Setting, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if ttl <= 0 {
 		ttl = settingsKeyCacheTTL
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		result := make(map[string]models.Setting, len(keys))
 		var cachedErr error
 		stale := make([]string, 0, len(keys))
@@ -126,7 +138,7 @@ func (s *settingsCacheStore) loadManyWithPolicy(
 		case 0:
 			return result, cachedErr
 		case 1:
-			entry, err := s.loadOneWithPolicy(stale[0], ttl, cacheErrors, loader)
+			entry, err := s.loadOneWithPolicy(ctx, stale[0], ttl, cacheErrors, loader)
 			if err != nil {
 				return nil, err
 			}
@@ -173,27 +185,38 @@ func (s *settingsCacheStore) loadManyWithPolicy(
 }
 
 func (s *settingsCacheStore) loadOne(key string, loader func([]string) (map[string]models.Setting, error)) (settingsCacheEntry, error) {
-	return s.loadOneWithPolicy(key, settingsKeyCacheTTL, false, loader)
+	return s.loadOneWithPolicy(context.Background(), key, settingsKeyCacheTTL, false, loader)
 }
 
+// loadOneWithTTL uses the runtime cache policy for one context-bound caller.
 func (s *settingsCacheStore) loadOneWithTTL(
+	ctx context.Context,
 	key string,
 	ttl time.Duration,
 	loader func([]string) (map[string]models.Setting, error),
 ) (settingsCacheEntry, error) {
-	return s.loadOneWithPolicy(key, ttl, true, loader)
+	return s.loadOneWithPolicy(ctx, key, ttl, true, loader)
 }
 
+// loadOneWithPolicy coalesces a key's refresh without sharing another caller's
+// cancellation; live waiters retry canceled loads and retain storage backoff.
 func (s *settingsCacheStore) loadOneWithPolicy(
+	ctx context.Context,
 	key string,
 	ttl time.Duration,
 	cacheErrors bool,
 	loader func([]string) (map[string]models.Setting, error),
 ) (settingsCacheEntry, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if ttl <= 0 {
 		ttl = settingsKeyCacheTTL
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return settingsCacheEntry{}, err
+		}
 		s.mu.RLock()
 		if entry, ok := s.entries[key]; ok {
 			fresh, err := entry.current(time.Now(), ttl)
@@ -215,12 +238,19 @@ func (s *settingsCacheStore) loadOneWithPolicy(
 		}
 		if call, ok := s.inflight[key]; ok {
 			s.mu.Unlock()
-			<-call.done
+			select {
+			case <-ctx.Done():
+				return settingsCacheEntry{}, ctx.Err()
+			case <-call.done:
+			}
+			if err := ctx.Err(); err != nil {
+				return settingsCacheEntry{}, err
+			}
 
 			s.mu.RLock()
 			currentGeneration := s.generations[key]
 			s.mu.RUnlock()
-			if currentGeneration != call.generation {
+			if currentGeneration != call.generation || isSettingsRequestTermination(call.err) {
 				continue
 			}
 			return call.entry, call.err
@@ -233,6 +263,7 @@ func (s *settingsCacheStore) loadOneWithPolicy(
 		s.mu.Unlock()
 
 		loaded, err := loader([]string{key})
+		cacheFailure := cacheErrors && err != nil && !isSettingsRequestTermination(err)
 		entry := settingsCacheEntry{}
 		if err == nil {
 			entry.loadedAt = time.Now()
@@ -240,7 +271,7 @@ func (s *settingsCacheStore) loadOneWithPolicy(
 				entry.setting = setting
 				entry.found = true
 			}
-		} else if cacheErrors {
+		} else if cacheFailure {
 			if staleEntryExists {
 				entry = staleEntry
 			}
@@ -250,7 +281,7 @@ func (s *settingsCacheStore) loadOneWithPolicy(
 
 		s.mu.Lock()
 		currentGeneration := s.generations[key]
-		if (err == nil || cacheErrors) && currentGeneration == call.generation {
+		if (err == nil || cacheFailure) && currentGeneration == call.generation {
 			s.entries[key] = entry
 		}
 		delete(s.inflight, key)
@@ -274,12 +305,17 @@ func (entry settingsCacheEntry) current(now time.Time, ttl time.Duration) (bool,
 	return !entry.loadedAt.IsZero() && now.Sub(entry.loadedAt) < ttl, nil
 }
 
+// cacheLoadError backs off shared storage failures without caching an
+// individual request's cancellation or expired deadline as a setting result.
 func (s *settingsCacheStore) cacheLoadError(
 	keys []string,
 	generations map[string]uint64,
 	ttl time.Duration,
 	err error,
 ) bool {
+	if isSettingsRequestTermination(err) {
+		return false
+	}
 	now := time.Now()
 	retry := false
 	s.mu.Lock()
@@ -295,4 +331,9 @@ func (s *settingsCacheStore) cacheLoadError(
 	}
 	s.mu.Unlock()
 	return retry
+}
+
+// isSettingsRequestTermination recognizes wrapped per-request context errors.
+func isSettingsRequestTermination(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

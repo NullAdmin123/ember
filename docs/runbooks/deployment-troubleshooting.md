@@ -132,6 +132,8 @@ docker compose --profile gateway logs --tail=200 redis ember-gateway
    - 例如 `reasonCode=expected_quote field=token offset=11 characterClass=single_quote` 表示 Token 值在期望双引号的位置使用了单引号；这是诊断格式示例，不代表任何真实客户端已确认采用该语法。非 Token 元数据已允许 HTTP token 形式，`expected_value` 表示值开头既不是双引号也不是合法 tchar。结合 `route/statusCode` 判断影响：认证路由 `200` 可以与旁路解析失败并存，受保护请求出现 `token_header_invalid` 才表示本地拒绝。
 
    本地 GoLand 排查时，重启正确的 `cmd/ember gateway` 进程后，由操作者复现一次客户端请求；在 `services/api/logs/gateway-YYYY-MM-DD.log` 中按上述两种 code 和 requestId 取证，无需打印认证头或手动查看 Token。
+
+   排查“同一客户端直连源站能登录、经过 Gateway 返回 `401`”时，同时按 `requestId` 收集 `authentication_request_shape`、`authentication_upstream_response` 和 `request_completed`。前者只观察代理已经读取的最多 `16 KiB`，记录 `contentType/bodyState/usernameState/pwState/passwordState`，没有用户名、密码、长度或摘要；`bodyState=valid_json` 时字段状态为 `missing/null/empty/present/invalid_type/duplicate`，其他 body 状态的字段均为 `unknown`。`pwState=missing` 与 `passwordState=present` 只能证明客户端采用了不同字段，不能据此自动改写登录 body；`present` 也不等于凭据验证通过。上游响应日志才直接证明代理实际取得的上游状态；若请求体尚未读完、超限、压缩或非 JSON，不能把 `unknown` 当成密码缺失。Info 不捕获登录 body，也不输出这组诊断。
 3. 按下表判断失败阶段；仅凭时间相邻不能证明两条日志属于同一请求，缺少客户端/路径关联时标记“未证实”。
 
    | 证据 | 判断与下一步 |
@@ -139,6 +141,7 @@ docker compose --profile gateway logs --tail=200 redis ember-gateway
    | 旧版 `code=application_header_invalid route=authentication` | Gateway 在请求到达 Emby 前返回 `401`，不是 Emby 已判定密码错误。修复提交 `e611675` 已移除此登录门槛；新部署仍出现时先核对运行镜像和实例版本 |
    | `code=authentication_metadata_unavailable reasonCode=application_header_invalid` 等 Debug 记录 | 新版仅表示审计元数据无法采集，请求继续转发；不能把其中的 reasonCode 当成旧版本地拒绝 |
    | 已确认运行修复版本，`request_completed route=authentication statusCode=400/401/403/500` | 精确认证路由保留了上游返回的状态；结合 Emby 侧同一请求证据判断原因，不能把所有 `401/403` 都归为密码错误 |
+   | `authentication_upstream_response statusCode=401` | 已直接观察到上游认证响应 `401`；结合相同 `requestId` 的请求字段状态、同一源站直连结果和服务端日志定位差异，不能仅凭最终状态判断字段值正确与否 |
    | `code=upstream_unavailable`，请求返回 `502` | Gateway 到上游的真实传输失败，先核对可达性与上游运行状态，不按凭据错误处理 |
    | `499`，视频为 `playback_canceled + proxyErrorCode=request_canceled`，普通代理仅有 Debug 取消诊断 | 代理请求已取消，不误判为 Emby/115 宕机；视频保留单条 Info 决策，不代表客户端收到回退视频 |
    | 登录 `200`，同时有 `authentication_response_invalid`、`authentication_response_decode_failed`、`authentication_response_read_failed`、`authentication_response_too_large` 或 `authentication_mapping_failed` | 上游成功响应已透传，但本地映射未建立；继续检查有界旁路解析、上游身份与用户绑定、存储错误。不能将客户端拿到 `200` 等同于整条登录链路通过 |
@@ -149,6 +152,16 @@ docker compose --profile gateway logs --tail=200 redis ember-gateway
 `Latest/Resume` 的旧 `item_container_snapshot_unusable` 是列表路由被误当详情后的旁路观察错误，不是登录拒绝证据；该误判已由 `c82064e` 修复。`direct_play_fallback ... statusCode=206` 属于播放回退结果，不能解释前面的登录失败。
 
 部署认证修复后，按同一客户端依次复测：登录、媒体库与图片加载、打开详情、实际播放、字幕及进度/停止上报。分别记录“通过/失败/未执行”，并确认 Infuse、SenPlayer 的既有使用路径没有回归；`302/200/206/204` 日志只能证明对应 HTTP 步骤，不能代替播放器实际出画、声音或字幕结果。把部署提交、双方版本、平台、日期/业务时区及分项结论补入客户端兼容矩阵，未实测项不得写成已兼容。
+
+#### Yamby 首页图片短暂返回 503
+
+无 Token 的精确 `/emby/Items/{Id}/Images/{Type}[/{Index}]` 请求走 Web Surface 开关。出现图片 `503` 时，先关联 `web_surface_config_unavailable` 与附近的数据库日志：
+
+- `reasonCode=request_canceled`：配置加载者的请求已取消，不代表存储故障；该错误不缓存或共享，健康等待者使用自己的 context 重新加载。
+- `reasonCode=request_deadline_exceeded`：该次配置请求超时，同样不写入共享错误缓存。
+- `reasonCode=config_unavailable`：其他配置读取故障，仍失败关闭；真实存储故障按原有 5 秒窗口退避，不能通过放开图片绕过开关。
+
+等待者可以独立取消，不会取消仍在读取配置的其他请求。部署修复后由操作者重新进入客户端首页复测，同时核对图片状态与实际显示；相同路径稍后出现 `200`，只能证明后一次请求成功，不能代替首页显示验收。旧日志没有 `reasonCode` 时，不能仅凭 `errorType=*errors.errorString` 判断取消；须与同一时间的数据库 `context canceled` 证据对照，禁止输出完整 SQL 参数或连接串。
 
 #### 慢起播、重复 GET 与播放名额异常
 

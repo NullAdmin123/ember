@@ -942,10 +942,11 @@ func (s *ConfigService) loadSettingsFromStoreContext(ctx context.Context, keys [
 
 // loadGatewayRuntimeSetting keeps one positive or negative cache entry per
 // fixed runtime key. The shared store coalesces concurrent refreshes and backs
-// off failed refreshes for the same TTL, so Web asset bursts cannot turn either
-// healthy or unavailable database reads into a per-request query loop.
+// off storage failures for the same TTL. Per-request cancellation and deadlines
+// do not poison unrelated callers; each waiting request keeps its own context.
 func (s *ConfigService) loadGatewayRuntimeSetting(ctx context.Context, key string) (map[string]models.Setting, error) {
 	return globalSettingsCacheStore.loadManyWithTTL(
+		ctx,
 		[]string{key},
 		gatewayRuntimeSettingCacheTTL,
 		func(keys []string) (map[string]models.Setting, error) {

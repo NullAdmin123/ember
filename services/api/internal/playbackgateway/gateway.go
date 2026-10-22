@@ -258,6 +258,10 @@ func (gateway *Gateway) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	case routeAuthentication:
 		// Only Emby decides whether a login request is valid. Request metadata
 		// is an optional audit fallback, never an identity or admission gate.
+		if gateway.isDebugEnabled() {
+			observation := observeAuthenticationRequest(request)
+			defer gateway.logAuthenticationRequestShape(requestLog.requestID, observation)
+		}
 		metadata, carrier, ok := extractAuthenticationApplicationMetadata(request)
 		if ok {
 			routeContext.metadata = metadata
@@ -436,7 +440,15 @@ func (gateway *Gateway) logSystemInfoPublicResponse(response *http.Response, rou
 // Emby's original successful response remains authoritative.
 func (gateway *Gateway) observeAuthenticationResponse(response *http.Response) error {
 	routeContext, ok := routeContextFromResponse(response)
-	if !ok || routeContext.kind != routeAuthentication || response.StatusCode != http.StatusOK {
+	if !ok || routeContext.kind != routeAuthentication {
+		return nil
+	}
+	requestID := "unavailable"
+	if response.Request != nil {
+		requestID = diagnosticRequestID(response.Request.Context())
+	}
+	gateway.debugf("[PlaybackGateway] level=debug code=authentication_upstream_response requestId=%s statusCode=%d", requestID, response.StatusCode)
+	if response.StatusCode != http.StatusOK {
 		return nil
 	}
 	if response.Body == nil {

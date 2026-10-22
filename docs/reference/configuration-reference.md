@@ -71,7 +71,7 @@ Go 统一入口仍会在日志初始化前加载 `EMBER_DOTENV` 指定文件；�
 
 - 旧版 `MOVIEPILOT_USERNAME` / `MOVIEPILOT_PASSWORD` 已废弃。
 - 若历史实例仍保存旧用户名密码配置，而 `MOVIEPILOT_API_KEY` 为空，设置中心测试应视为需要迁移，而不是“未配置成功”。
-- `PLAYBACK_GATEWAY_WEB_ENABLED` 只存在于设置中心和 `settings` 表，不读取同名环境变量；Gateway 对已识别 Web Surface 使用 5 秒进程缓存，正值和默认值对应的缺失记录都会缓存，TTL 到期后的并发刷新合并为一次数据库读取。刷新错误同样退避 5 秒，期间持续返回 `503`，避免数据库故障时逐请求重试；关闭时返回 `404`。
+- `PLAYBACK_GATEWAY_WEB_ENABLED` 只存在于设置中心和 `settings` 表，不读取同名环境变量；Gateway 对已识别 Web Surface 使用 5 秒进程缓存，正值和默认值对应的缺失记录都会缓存，TTL 到期后的并发刷新合并为一次数据库读取。真实存储故障退避 5 秒，期间持续返回 `503`，避免数据库故障时逐请求重试；请求取消或超时不写入共享错误缓存，健康等待者使用自己的 context 重新加载，取消的等待者立即退出；关闭时返回 `404`。
 - `email_verification` 会经过 Normalize（大小写与首尾空格不敏感），不要再假设只有严格字面量 `"true"` 才算开启。
 
 ### 2.3 邮件服务
@@ -143,7 +143,7 @@ Go 统一入口仍会在日志初始化前加载 `EMBER_DOTENV` 指定文件；�
 
 - API 保存 `LOG_LEVEL` 后立即原子切换当前进程；Gin 安全 access 摘要和 GORM 参数化 SQL 随新级别生效，不重建数据库连接。
 - Gateway 启动时读取一次最终值，之后每个进入 Gateway Handler 的业务请求先读取进程缓存；缓存 5 秒内不访问数据库，TTL 到期后的并发刷新合并为一次数据库读取，单次读取上限 `500ms`。`/health` 不承担配置刷新职责。
-- Gateway 刷新失败时保留上一次有效级别并继续处理请求；刷新错误会退避 5 秒，避免数据库故障时逐请求重试。同一连续失败只记录一次 `log_level_refresh_failed`，恢复时记录 `log_level_refresh_recovered`。
+- Gateway 刷新失败时保留上一次有效级别并继续处理请求；真实存储故障会退避 5 秒，避免数据库故障时逐请求重试；请求取消或超时不缓存或共享，健康等待者按自己的 context 重试。同一连续失败只记录一次 `log_level_refresh_failed`，恢复时记录 `log_level_refresh_recovered`。
 - `debug` 仍不得输出 query value、Header 原值、Cookie、Token、Authorization、完整外部响应或其他敏感载体，也不控制浏览器 console、Nginx、Docker logging driver 或 PostgreSQL 原生日志。
 - Python Bot 继续使用环境变量 `LOG_LEVEL`；后台修改不会改变 Bot 日志级别。
 

@@ -50,7 +50,7 @@ Ember 已为数据库 `settings` 建立按 key 的进程内缓存，解决同一
 | 范围 | 当前策略 | 刷新方式 | 失败语义 | 空闲淘汰 |
 | --- | --- | --- | --- | --- |
 | 普通 `ConfigService` 数据库 key | 加载后 `60s` 内命中；包含 negative cache | TTL 到期后的下一次访问同步查询数据库 | 数据库错误不缓存，下次访问继续重试 | 无；过期条目保留到再次读取或主动失效 |
-| `LOG_LEVEL`、`PLAYBACK_GATEWAY_WEB_ENABLED` | Gateway 专用 `5s` 进程缓存 | 下一次相关 Gateway 请求同步刷新；同 key 并发合并 | 错误退避 `5s`；日志级别保留上一次有效运行值，Web 开关读取失败返回 `503` | 无 |
+| `LOG_LEVEL`、`PLAYBACK_GATEWAY_WEB_ENABLED` | Gateway 专用 `5s` 进程缓存 | 下一次相关 Gateway 请求同步刷新；同 key 并发合并 | 真实存储故障退避 `5s`，请求取消/超时不缓存或共享，等待者独立取消；日志级别保留上一次有效运行值，Web 开关读取失败返回 `503` | 无 |
 | Bot Telegram 运行期配置 | Bot 聚合结果缓存 `30s` | 下一次 Bot 调用通过 Internal API 刷新 | 字段缺失或刷新失败保留最近缓存；显式空群 Chat ID 清除旧群目的地 | 无 |
 | API `BOT_NOTIFY_URL` | `30s` 刷新节流，底层仍经过 `ConfigService` | 下一次通知调用触发检查，支持显式 `Reload()` | 沿用 `ConfigService.GetString` 的空值语义 | 无 |
 
@@ -195,6 +195,7 @@ Bot 成功读取 `TELEGRAM_GROUP_CHAT_ID: ""` 时必须清除旧群目的地，�
 - expire-after-access 访问续期及空闲淘汰。
 - 写后失效、删除后失效和在途 refresh/失效竞态。
 - 普通 `60s` policy 与 Gateway `5s` policy 隔离。
+- 请求取消或超时不进入共享错误缓存，健康等待者重试其他加载者的取消结果，等待者可以独立取消；普通存储故障仍退避且保留 generation 失效保护。
 - 敏感配置只缓存原始密文记录，不在日志或测试输出中泄露值。
 
 ### 非真实外部验证

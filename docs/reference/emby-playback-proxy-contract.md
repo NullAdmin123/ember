@@ -154,6 +154,7 @@ POST /emby/Users/AuthenticateByName?X-Emby-Client=Emby+Web&X-Emby-Device-Name=Go
 - 本地 Token 候选解析接受三个应用头中的 `Emby`/`MediaBrowser` grammar；`Authorization: MediaBrowser` 的目标 Emby/Yamby 行为仍未证实，候选解析不等于替上游认证成功。
 - 2026-09-29 本地 Gateway 启动日志确认目标为 `4.9.3.0`；Yamby 登录返回 `200` 且记录映射，随后携直接 Token 的 `/emby/System/Info` 被本地拒绝，新增诊断定位到 `expected_quote field=user_id offset=12`。这证明客户端 UserId 值并非以双引号开始，不能据此推断其原值。[RFC 9110 §11.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-11.2) 允许 auth-param 值为 token 或 quoted-string；当前修补让非 Token 元数据接受 §5.6.2 的有界 tchar 形式，不跳过字段、不重写 Header，Token 的 quoted-string 与冲突检查保留。同日修补后，本地 Yamby 实际请求确认登录、SystemInfo、Views、Items、Resume 和 Latest 均返回 `200`，未再出现本地认证解析错误或 `401`；这一结果证明当前登录和列表链路；图片仍被 Web 关闭策略返回 `404`，作为独立已知问题保留。用户确认播放此前正常，本次按要求不复验。提交前补齐登录后请求、Token 冲突保护和脱敏诊断的 mock 回归。
 - Debug 下，应用头身份语法解析失败额外输出一条 `application_header_parse_failed`，与 `request_completed` 共用 `requestId`，包含 route、最终状态、固定原因码、字段类别、从零开始的字节偏移和字符类别。无具体位置的头部级错误使用 `offset=-1`；未知字段名统一为 `other`，不记录字段名原文、字段值或原始字符。诊断与准入共用解析器，不放宽语法或 Token 冲突检查；认证路由出现此日志仍可透传上游 `200`，不能仅凭解析日志认定登录被拒绝。
+- Debug 下，登录请求在代理实际读取 body 时最多旁路保留 `16 KiB`，以 `authentication_request_shape` 记录固定媒体类型、body 完整性及 `Username/Pw/Password` 的存在、空值和类型状态；不提前读取、不修改字节或原始 Read/Close 错误，不记录字段值、字段长度或摘要。未读完、读取失败、超限、压缩及非 JSON body 只记录固定状态。`authentication_upstream_response` 记录实际取得的上游 HTTP 状态，两条日志以 `requestId` 关联；字段非空不能证明凭据正确，上游 `401` 也不能单独证明密码错误。
 
 网关处理要求：
 
@@ -264,7 +265,7 @@ Ember 本地撤销固定三种粒度：
 
 固定 SDK [Web Socket 合同](https://github.com/MediaBrowser/Emby.SDK/blob/6ee0155063bc85578196489926359a8f37419502/Documentation/doc/restapi/Web-Socket.html) 使用服务根地址的 `ws/wss` Upgrade，并携带 `api_key + deviceId`。Gateway 对根 Upgrade 继续执行通用 query Token 映射，现有 ReverseProxy 透传并升级 `101`；关闭 Web UI 不影响该链路。
 
-`PLAYBACK_GATEWAY_WEB_ENABLED` 只由设置中心数据库托管，默认 `true`，不读取环境变量。Gateway 对已识别 Web Surface 请求使用 5 秒进程缓存，正值和默认值对应的缺失记录都会缓存，TTL 到期后的并发刷新合并为一次数据库读取，刷新错误同样退避 5 秒：开启则保持原始 method/path/query/Header 和响应透明代理；关闭时不访问上游，`GET` 返回固定的 `text/html; charset=utf-8` 中文友好 `404` 页面并携带 `Cache-Control: no-store`，`HEAD` 返回同状态及等价响应头但不写正文。提示页不加载 Emby、Vue、脚本、外部样式或字体，只显示“Emby 网页访问已关闭”和一条客户端/管理员指引；刷新读取失败期间仍返回空体 `503`。该读取不进入普通 API、视频、WebSocket 或健康检查路径。
+`PLAYBACK_GATEWAY_WEB_ENABLED` 只由设置中心数据库托管，默认 `true`，不读取环境变量。Gateway 对已识别 Web Surface 请求使用 5 秒进程缓存，正值和默认值对应的缺失记录都会缓存，TTL 到期后的并发刷新合并为一次数据库读取。真实存储故障退避 5 秒；请求取消或超时不缓存或共享，健康等待者重新回源，取消的等待者立即退出。开启则保持原始 method/path/query/Header 和响应透明代理；关闭时不访问上游，`GET` 返回固定的 `text/html; charset=utf-8` 中文友好 `404` 页面并携带 `Cache-Control: no-store`，`HEAD` 返回同状态及等价响应头但不写正文。提示页不加载 Emby、Vue、脚本、外部样式或字体，只显示“Emby 网页访问已关闭”和一条客户端/管理员指引；刷新读取失败期间仍返回空体 `503`。该读取不进入普通 API、视频、WebSocket 或健康检查路径。
 
 目标日志已确认浏览器访问 Gateway 时实际请求 `/`、`/favicon.ico`、完整静态资源，以及登录前 `/web/strings/zh-CN.json`、`/emby/Branding/Css.css`、`/emby/Users/Public`、`/emby/Branding/Configuration` 和 `POST /emby/Users/AuthenticateByName`。2026-08-31 真实浏览器确认完整资源、公开用户、Branding Configuration、Brotli 登录映射、Sessions Capabilities、UserSettings、Primary/Backdrop 图片和登录后 WebSocket OPEN；Web 关闭 GET/HEAD 的中文 `404`、禁缓存和 Infuse 不受影响同样通过。Web 播放 115 文件按用户当前无使用场景排除，不表述为已兼容。
 

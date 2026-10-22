@@ -92,6 +92,16 @@ go build ./...
 
 截至 2026-09-21，修复后 Yamby 登录、资源加载与播放，以及 Infuse/SenPlayer 的修复后回归仍待执行；真实 Emby XML 响应也未验证。2026-09-29 的 Yamby 登录与列表实测结果已更新到上表，不能把该历史待验证状态当作最新结论。实机取证按部署排障手册的客户端登录排障与复测步骤执行。后续记录至少包含部署提交、Emby/客户端精确版本、平台、日期/业务时区和各步骤“通过/失败/未执行”；本条不能用历史数据库集成或其他客户端结果代替。
 
+### 3.2 2026-10-22 本地 Yamby 空密码请求排查
+
+目标 Emby 版本由本地 Gateway 启动日志确认为 `4.9.3.0`，客户端精确版本未记录。用户确认同一 Yamby 直连本地配置的源站可登录；本轮没有改动认证决定或请求字段值，只增加 Debug 脱敏旁路诊断。
+
+- `21:40:35` 至 `21:40:39` 的四次登录：JSON 完整有效，`Username` 非空、`Pw/Password` 为空，query key 数为零；相同 `requestId` 的 `authentication_upstream_response` 明确记录上游 `401`。
+- 用户确认重新输入了密码；`21:44:01` 的 Yamby 登录中 `Pw/Password` 变为非空，上游与最终响应均为 `200`，随后受保护接口、条目详情和 PlaybackInfo 返回 `200`。
+- 以上证明本地重新输入密码后登录恢复；客户端此前为何生成空字段尚未证实，不能直接归因于缓存。该结果不代替 hz 入口复测，也不扩展为实际播放验收。
+
+诊断只记录固定字段状态，不记录用户名、密码、字段长度或摘要；mock 回归、Gateway race、Go vet/build 已通过，外部请求由用户在现有本地进程上发起。
+
 ## 4. Infuse 扫库与 Token Store
 
 Infuse 会并发请求 Views、VirtualFolders、DisplayPreferences、Items、Latest 和 Resume。每个请求仍执行当前 Token 映射、撤销与用户状态检查，不增加 Principal TTL 缓存：

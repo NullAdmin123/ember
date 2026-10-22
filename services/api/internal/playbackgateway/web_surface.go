@@ -22,7 +22,13 @@ const (
 func (gateway *Gateway) serveWebSurface(writer http.ResponseWriter, request *http.Request) {
 	enabled, err := gateway.playbackGatewayWebEnabled(request.Context())
 	if err != nil {
-		gateway.logger.Printf("[PlaybackGateway] code=web_surface_config_unavailable message=%q errorType=%T", "Emby网页配置读取失败", err)
+		reasonCode := "config_unavailable"
+		if errors.Is(err, context.Canceled) {
+			reasonCode = "request_canceled"
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			reasonCode = "request_deadline_exceeded"
+		}
+		gateway.logger.Printf("[PlaybackGateway] code=web_surface_config_unavailable message=%q reasonCode=%s errorType=%T", "Emby网页配置读取失败", reasonCode, err)
 		writer.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}

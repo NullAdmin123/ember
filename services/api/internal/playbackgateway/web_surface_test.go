@@ -332,6 +332,39 @@ func TestGatewayWebSurfaceProxiesExactItemImageWithoutToken(t *testing.T) {
 	}
 }
 
+// TestGatewayImagePolicyFailureDiagnostics distinguishes request cancellation
+// from configuration outages without exposing error text or forwarding images.
+func TestGatewayImagePolicyFailureDiagnostics(t *testing.T) {
+	for _, test := range []struct {
+		name, reason string
+		err          error
+	}{
+		{name: "canceled", reason: "request_canceled", err: fmt.Errorf("fixture-private-error: %w", context.Canceled)},
+		{name: "deadline", reason: "request_deadline_exceeded", err: context.DeadlineExceeded},
+		{name: "configuration", reason: "config_unavailable", err: errors.New("fixture-private-error")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer upstream.Close()
+			var logs bytes.Buffer
+			gateway := newWebSurfaceTestGateway(t, upstream.URL, &fakeWebSurfacePolicy{err: test.err}, &logs)
+			response := httptest.NewRecorder()
+			gateway.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/emby/Items/fixture-item/Images/Primary", nil))
+			if response.Code != http.StatusServiceUnavailable || calls.Load() != 0 {
+				t.Fatal("failed policy lookup exposed an image")
+			}
+			if !strings.Contains(logs.String(), "reasonCode="+test.reason) {
+				t.Fatalf("missing safe failure classification %s", test.reason)
+			}
+			assertSecretsAbsent(t, logs.String(), "fixture-private-error")
+		})
+	}
+}
+
 func TestGatewayItemImageRequiresExactPathMethodAndWebPolicy(t *testing.T) {
 	tests := []struct {
 		name       string
