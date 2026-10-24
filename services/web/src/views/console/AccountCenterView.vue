@@ -10,6 +10,8 @@ import {
 } from '@element-plus/icons-vue'
 import EmberFormDialog from '@/components/ember/forms/EmberFormDialog.vue'
 import EmberEmptyStateCard from '@/components/ember/feedback/EmberEmptyStateCard.vue'
+import EmberMetricCard from '@/components/ember/data-display/EmberMetricCard.vue'
+import EmberPageHeaderCard from '@/components/ember/layout/EmberPageHeaderCard.vue'
 import EmberSegmentTabs from '@/components/ember/layout/EmberSegmentTabs.vue'
 import P115AccountSection from '@/components/account/P115AccountSection.vue'
 import { formatDateTime } from '@/utils/date'
@@ -633,22 +635,21 @@ onMounted(() => {
       当前账号必须先修改密码
     </div>
 
-    <UserEntitlementsPanel v-if="user.role === 'user' && !passwordResetRequired" :current-group="user.planGroup || undefined" />
-    <section class="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-      <div class="border-b border-gray-100 px-4 py-4 sm:px-6">
-        <div data-test="account-section-nav" class="w-full overflow-x-auto">
-          <EmberSegmentTabs
-            v-model="activeTab"
-            :tabs="[...accountTabs]"
-            aria-label="账号中心分段"
-            ariaLabel="账号中心分段"
-            :full-width="true"
-          />
-        </div>
+    <EmberPageHeaderCard title="账号中心">
+      <div data-test="account-section-nav" class="mt-4 w-full overflow-x-auto">
+        <EmberSegmentTabs
+          v-model="activeTab"
+          :tabs="[...accountTabs]"
+          ariaLabel="账号中心分段"
+          :full-width="true"
+        />
       </div>
+    </EmberPageHeaderCard>
 
-      <!-- 内容区全宽铺开，并用最小高度避免宽屏白卡只剩一条细内容 -->
-      <div class="min-h-[calc(100vh-14rem)] p-6 sm:p-8">
+    <UserEntitlementsPanel v-if="user.role === 'user' && !passwordResetRequired" :current-group="user.planGroup || undefined" />
+
+    <section class="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
+      <div class="p-6 sm:p-8">
         <div v-if="activeTab === 'p115'" data-test="account-section-p115">
           <EmberEmptyStateCard
             v-if="authStore.isAdmin"
@@ -665,7 +666,7 @@ onMounted(() => {
               </RouterLink>
             </template>
           </EmberEmptyStateCard>
-          <P115AccountSection v-else />
+          <P115AccountSection v-else :embedded="true" />
         </div>
         <!-- 基本资料：账号信息、邮箱、Telegram 绑定与管理员 Emby 关联。 -->
         <div
@@ -675,22 +676,22 @@ onMounted(() => {
           class="space-y-8"
         >
           <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <div class="space-y-2 rounded-2xl border border-gray-100 bg-gray-50/70 p-4">
-              <p class="text-xs font-semibold text-gray-500">用户名</p>
-              <p class="truncate text-base font-medium text-gray-900">{{ user.username || '-' }}</p>
-            </div>
-            <div class="space-y-2 rounded-2xl border border-gray-100 bg-gray-50/70 p-4">
-              <p class="text-xs font-semibold text-gray-500">有效期</p>
-              <p class="truncate text-base font-medium text-gray-900">
-                {{ user.role === 'user' && user.resourceAccessGranted === false ? '无有效权益' : (user.expiresAt ? formatDateTime(user.expiresAt, 'short') : '永久有效') }}
-              </p>
-            </div>
-            <div class="space-y-2 rounded-2xl border border-gray-100 bg-gray-50/70 p-4 sm:col-span-2 xl:col-span-1">
-              <p class="text-xs font-semibold text-gray-500">创建时间</p>
-              <p class="truncate text-base font-medium text-gray-900">
-                {{ formatDateTime(user.createdAt, 'short') }}
-              </p>
-            </div>
+            <EmberMetricCard
+              title="用户名"
+              :value="user.username || '-'"
+              value-class="mt-2 truncate text-base font-medium text-gray-900"
+            />
+            <EmberMetricCard
+              title="有效期"
+              :value="user.role === 'user' && user.resourceAccessGranted === false ? '无有效权益' : (user.expiresAt ? formatDateTime(user.expiresAt, 'short') : '永久有效')"
+              value-class="mt-2 truncate text-base font-medium text-gray-900"
+            />
+            <EmberMetricCard
+              title="创建时间"
+              :value="formatDateTime(user.createdAt, 'short')"
+              value-class="mt-2 truncate text-base font-medium text-gray-900"
+              class="sm:col-span-2 xl:col-span-1"
+            />
           </div>
 
           <div class="rounded-2xl border border-gray-100 p-5 sm:p-6">
@@ -721,7 +722,6 @@ onMounted(() => {
             <p v-else-if="hasDomainAllowlist" class="mt-2 text-xs leading-5 text-gray-500">
               {{ allowedDomainsHint }}
             </p>
-            <p v-else class="mt-2 text-xs leading-5 text-gray-500">用于找回密码和接收系统通知。</p>
           </div>
 
           <div
@@ -777,7 +777,7 @@ onMounted(() => {
                 <button
                   v-else
                   type="button"
-                  class="inline-flex h-11 items-center justify-center rounded-xl border border-red-200 bg-white px-5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 cursor-pointer disabled:opacity-60"
+                  class="inline-flex h-11 items-center justify-center rounded-xl border border-red-200 bg-red-50 px-5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 cursor-pointer disabled:opacity-60"
                   :disabled="unbindingEmby"
                   @click="handleUnbindEmby"
                 >
@@ -812,7 +812,7 @@ onMounted(() => {
                   <div class="mt-auto">
                     <button
                       type="button"
-                      class="inline-flex h-11 items-center justify-center rounded-xl border border-red-200 bg-white px-5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50 cursor-pointer disabled:opacity-60"
+                      class="inline-flex h-11 items-center justify-center rounded-xl border border-red-200 bg-red-50 px-5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 cursor-pointer disabled:opacity-60"
                       :disabled="unbinding"
                       @click="handleUnbindTelegram"
                     >
@@ -1012,17 +1012,14 @@ onMounted(() => {
                 v-for="library in mediaLibrarySettings?.libraries"
                 :key="library.id"
                 :data-library-id="library.id"
-                role="button"
-                tabindex="0"
-                class="flex min-h-[4.75rem] cursor-pointer items-start gap-3 rounded-2xl border border-gray-200 bg-gray-50/60 p-4 transition-colors hover:border-ember/40 hover:bg-ember/5 focus:outline-none focus:ring-4 focus:ring-ember/10"
+                class="flex min-h-[4.75rem] cursor-pointer items-start gap-3 rounded-2xl border border-gray-200 bg-gray-50/60 p-4 transition-colors hover:border-ember/40 hover:bg-ember/5"
                 :class="!library.inGroupTemplate || mediaLibrarySyncing ? 'opacity-60' : ''"
                 @click="toggleMediaLibraryCard(library.id, library.inGroupTemplate)"
-                @keydown.enter.prevent="toggleMediaLibraryCard(library.id, library.inGroupTemplate)"
-                @keydown.space.prevent="toggleMediaLibraryCard(library.id, library.inGroupTemplate)"
               >
                 <el-checkbox
                   :model-value="selectedMediaLibraryIdSet.has(library.id)"
                   :disabled="!library.inGroupTemplate || mediaLibrarySyncing"
+                  :aria-label="library.name"
                   size="large"
                   @click.stop
                   @update:model-value="(value: string | number | boolean) => setMediaLibrarySelection(library.id, value)"
@@ -1061,7 +1058,7 @@ onMounted(() => {
       v-model="verifyDialogVisible"
       title="验证邮箱变更"
     >
-      <div class="px-6 pb-2 pt-2 space-y-5">
+      <div class="space-y-5">
         <p class="text-sm text-gray-600">
           已向 {{ pendingNewEmail }} 发送 6 位验证码，有效期 10 分钟。
         </p>
@@ -1090,7 +1087,7 @@ onMounted(() => {
       </div>
 
       <template #footer>
-        <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-3">
           <button
             class="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 cursor-pointer"
             @click="handleCancelEmailChange"
@@ -1112,7 +1109,7 @@ onMounted(() => {
       v-model="embyBindDialogVisible"
       title="关联 Emby 账号"
     >
-      <div class="px-6 pb-2 pt-2 space-y-5">
+      <div class="space-y-5">
         <div class="space-y-2">
           <label for="emby-user-search" class="text-xs font-semibold text-gray-500">搜索 Emby 用户</label>
           <div class="flex flex-col gap-3 sm:flex-row">
@@ -1177,7 +1174,7 @@ onMounted(() => {
       </div>
 
       <template #footer>
-        <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-3">
           <button
             class="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 cursor-pointer"
             @click="handleCancelEmbyBind"

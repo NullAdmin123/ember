@@ -63,7 +63,7 @@ const hasCalendarItems = computed(() => totalItems.value > 0)
 type SummaryCard = {
   title: string
   value: number
-  detail: string
+  detail?: string
   icon: Component
   tone: Tone
 }
@@ -79,21 +79,18 @@ const summaryCards = computed<SummaryCard[]>(() => [
   {
     title: '已入库',
     value: readyCount.value,
-    detail: '可以直接观看',
     icon: CircleCheckFilled,
     tone: 'success'
   },
   {
     title: '今日播出',
     value: todayCount.value,
-    detail: '当天重点',
     icon: Clock,
     tone: 'info'
   },
   {
     title: '缺失集数',
     value: missingCount.value,
-    detail: '已播但还未入库',
     icon: WarningFilled,
     tone: 'warning'
   }
@@ -206,9 +203,10 @@ function setDayRowRef(date: string, element: HTMLElement | null): void {
 
 async function scrollToWeekDate(date: string): Promise<void> {
   await nextTick()
+  const reduceMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   requestAnimationFrame(() => {
     dayRowRefs.value[date]?.scrollIntoView({
-      behavior: 'smooth',
+      behavior: reduceMotion ? 'auto' : 'smooth',
       block: 'start'
     })
   })
@@ -342,7 +340,6 @@ onMounted(() => {
                     @change="changeWeekDate"
                   />
                 </div>
-                <p class="tv-picker-hint">选择日期后会自动定位到所在周。</p>
               </div>
             </div>
             <div class="tv-status-group">
@@ -573,8 +570,8 @@ onMounted(() => {
 }
 
 .tv-status-chip-active {
-  border-color: rgba(15, 23, 42, 0.9);
-  background: rgba(15, 23, 42, 0.94);
+  border-color: var(--ember-red);
+  background: var(--ember-red);
   color: #ffffff;
 }
 

@@ -331,7 +331,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="space-y-6 animate-fade-in">
+  <div class="space-y-6">
     <EmberPageHeaderCard title="播放排行榜">
       <template #actions>
         <div class="flex w-full flex-col gap-3 md:w-auto md:flex-wrap md:items-center md:justify-end lg:flex-row">
@@ -349,6 +349,7 @@ onMounted(() => {
               :type="period === 'daily' ? 'date' : 'week'"
               value-format="YYYY-MM-DD"
               :placeholder="period === 'daily' ? '选择日期' : '选择周'"
+              :aria-label="period === 'daily' ? '选择榜单日期' : '选择榜单周'"
               class="w-full input-ember form-date"
               :disabled="loading"
             />
@@ -458,7 +459,7 @@ onMounted(() => {
       title="配置统计媒体库"
       width="min(920px, calc(100vw - 24px))"
     >
-      <div class="space-y-4 px-6 pb-2 pt-2">
+      <div class="space-y-4">
         <div class="grid gap-3 md:grid-cols-3">
           <div class="rounded-2xl border border-gray-200 bg-stone-50 px-4 py-4">
             <p class="text-xs font-semibold tracking-wide text-gray-400">当前设置</p>
@@ -498,7 +499,6 @@ onMounted(() => {
           <div class="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-5 py-4">
             <div>
               <h2 class="text-base font-semibold text-gray-900">参与统计的媒体库</h2>
-              <p class="mt-1 text-sm text-gray-500">勾选需要参与排行榜统计的媒体库。</p>
             </div>
             <div class="flex flex-wrap gap-2">
               <span class="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700">
@@ -523,7 +523,12 @@ onMounted(() => {
             description="请重试；持续失败时检查 Emby 连接和访问权限。"
           >
             <template #actions>
-              <button type="button" class="btn-ember" data-test="retry-allowlist" @click="fetchRankingAllowlist(true)">
+              <button
+                type="button"
+                class="btn-ember cursor-pointer rounded-xl px-4 py-2.5 text-sm font-semibold"
+                data-test="retry-allowlist"
+                @click="fetchRankingAllowlist(true)"
+              >
                 重新读取
               </button>
             </template>
@@ -537,7 +542,12 @@ onMounted(() => {
             description="请先确认 Emby 已配置且媒体库列表可正常读取。"
           >
             <template #actions>
-              <button type="button" class="btn-ember" data-test="retry-allowlist" @click="fetchRankingAllowlist(true)">
+              <button
+                type="button"
+                class="btn-ember cursor-pointer rounded-xl px-4 py-2.5 text-sm font-semibold"
+                data-test="retry-allowlist"
+                @click="fetchRankingAllowlist(true)"
+              >
                 重新读取
               </button>
             </template>
@@ -613,7 +623,7 @@ onMounted(() => {
         </div>
       </div>
       <template #footer>
-        <div class="flex flex-wrap justify-end gap-3 px-6 pb-6 pt-2">
+        <div class="flex flex-wrap justify-end gap-3">
           <button
             type="button"
             class="inline-flex h-[42px] cursor-pointer items-center justify-center rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-700 transition-colors duration-200 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"

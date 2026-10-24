@@ -71,6 +71,7 @@ const EmberTableCardStub = defineComponent({
   setup(props, { slots }) {
     return () =>
       h('section', [
+        slots.header?.(),
         h(
           'div',
           props.data.map((row: any) => h('div', { class: 'device-row' }, row.deviceName))

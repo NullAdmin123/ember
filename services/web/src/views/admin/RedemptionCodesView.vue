@@ -342,7 +342,6 @@ onMounted(async () => {
     <EmberPageHeaderCard
       :hide-title="props.embedded"
       title="兑换码池"
-      description="生成和管理注册/续期兑换码"
     >
       <template #titleSuffix>
         <span class="rounded-full bg-gray-100 px-2 py-1 text-xs font-normal text-gray-500">{{ total }} 个兑换码</span>
@@ -353,10 +352,6 @@ onMounted(async () => {
 
       <template #actions>
         <div class="flex flex-wrap items-center gap-3">
-          <div class="flex h-[42px] items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3">
-            <span class="text-sm text-gray-600">包含失效/耗尽</span>
-            <el-switch v-model="queryParams.showAll" size="small" @change="handleSearch" />
-          </div>
           <button
             @click="openCreateDialog"
             class="btn-ember inline-flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm hover:shadow-md active:scale-[0.99]"
@@ -369,7 +364,7 @@ onMounted(async () => {
 
       <EmberFilterPanel
         wrapper-class="flex flex-col gap-3 xl:flex-row xl:items-end"
-        content-class="grid flex-1 grid-cols-1 gap-3 md:grid-cols-3"
+        content-class="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4"
         actions-class="flex items-center gap-2 self-end xl:ml-auto xl:shrink-0"
       >
         <EmberSearchInput
@@ -410,6 +405,14 @@ onMounted(async () => {
             :value="option.value"
           />
         </EmberSelectField>
+
+        <div class="space-y-1.5">
+          <label class="text-xs font-semibold tracking-wide text-gray-500">显示范围</label>
+          <div class="flex h-[42px] items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3">
+            <span class="text-sm text-gray-600">包含失效/耗尽</span>
+            <el-switch v-model="queryParams.showAll" size="small" @change="handleSearch" />
+          </div>
+        </div>
 
         <template #actions>
           <button
@@ -536,7 +539,7 @@ onMounted(async () => {
       width="680px"
       class="rounded-2xl"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form label-position="top" class="space-y-5">
           <div class="rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
             <div class="mb-3">
@@ -614,13 +617,12 @@ onMounted(async () => {
                 placeholder="描述兑换码用途，最多 500 字"
                 class="w-full !w-full input-ember"
               />
-              <div class="text-xs text-gray-400">不填则保持原有行为。</div>
             </div>
           </el-form-item>
         </el-form>
       </div>
       <template #footer>
-        <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-3">
           <button
             @click="dialogVisible = false"
             class="cursor-pointer rounded-xl px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
@@ -644,7 +646,7 @@ onMounted(async () => {
       width="520px"
       class="rounded-2xl"
     >
-      <div class="p-6 pt-2 space-y-4">
+      <div class="space-y-4">
         <div class="flex items-center justify-between gap-4 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3">
           <div>
             <div class="text-sm font-semibold text-gray-900">本次共生成 {{ batchCreatedCodes.length }} 个兑换码</div>
@@ -671,7 +673,7 @@ onMounted(async () => {
         </div>
       </div>
       <template #footer>
-        <div class="px-6 pb-6 pt-0 flex justify-end gap-3">
+        <div class="flex justify-end gap-3">
           <button
             @click="batchResultDialogVisible = false"
             class="cursor-pointer px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors font-medium"
@@ -688,7 +690,7 @@ onMounted(async () => {
       width="520px"
       class="rounded-2xl"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form label-position="top" class="space-y-4">
           <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <el-form-item label="最大使用次数">
@@ -766,7 +768,7 @@ onMounted(async () => {
         </el-form>
       </div>
       <template #footer>
-        <div class="px-6 pb-6 pt-0 flex justify-end gap-3">
+        <div class="flex justify-end gap-3">
           <button
             @click="editDialogVisible = false"
             class="cursor-pointer px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors font-medium"

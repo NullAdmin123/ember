@@ -10,6 +10,9 @@ import {
   Film,
   Setting,
   User,
+  UserFilled,
+  Histogram,
+  Warning,
   Ticket,
   ShoppingCart,
   Monitor,
@@ -60,13 +63,13 @@ const menuItems = computed<MenuEntry[]>(() => [
   {
     title: '账号中心',
     path: '/console/account',
-    icon: Setting,
+    icon: UserFilled,
     role: 'user'
   },
   {
     title: '我的画像',
     path: '/console/profile-analytics',
-    icon: DataLine,
+    icon: Histogram,
     role: 'user'
   },
   {
@@ -90,7 +93,9 @@ const menuItems = computed<MenuEntry[]>(() => [
   {
     title: '续费中心',
     path: '/console/renewal',
-    icon: ShoppingCart
+    icon: ShoppingCart,
+    role: 'user',
+    exactRole: true
   },
   {
     title: '管理控制台',
@@ -124,7 +129,7 @@ const menuItems = computed<MenuEntry[]>(() => [
       {
         title: '缺集管理',
         path: '/console/media-gaps',
-        icon: Film,
+        icon: Warning,
         role: 'admin'
       },
       {
@@ -163,10 +168,10 @@ const isActive = (path: string) => route.path === path || route.path.startsWith(
     </div>
 
     <!-- Navigation -->
-    <nav class="flex-1 overflow-y-auto py-6 px-3 space-y-1">
+    <nav class="flex-1 overflow-y-auto py-4 px-3 space-y-1">
       <template v-for="item in menuItems" :key="item.title">
         <!-- Group Header -->
-        <div v-if="item.type === 'group' && authStore.isAdmin" class="mt-8 mb-2 px-3">
+        <div v-if="item.type === 'group' && authStore.isAdmin" class="mt-5 mb-1.5 px-3">
           <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">
             {{ item.title }}
           </h3>

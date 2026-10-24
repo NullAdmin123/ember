@@ -20,6 +20,12 @@ import type { P115AccountStatus, PersonalP115Account, PersonalP115Usage } from '
 
 type AccountAction = 'create' | 'replace' | 'validate' | 'directory' | 'concurrency' | 'enabled' | 'revoke'
 
+const props = withDefaults(defineProps<{
+  embedded?: boolean
+}>(), {
+  embedded: false
+})
+
 const account = ref<PersonalP115Account | null>(null)
 const usage = ref<PersonalP115Usage | PersonalP115Account | null>(null)
 const loading = ref(false)
@@ -233,6 +239,8 @@ onMounted(() => {
 <template>
   <div class="space-y-6">
     <EmberPageHeaderCard
+      v-if="!props.embedded || account"
+      :hide-title="props.embedded"
       title="115 网盘"
       description="Cookie 只在提交时写入，保存后不会回显。"
     >

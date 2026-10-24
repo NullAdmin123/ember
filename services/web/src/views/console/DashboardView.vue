@@ -155,15 +155,14 @@ watch(
 </script>
 
 <template>
-  <div class="space-y-6 animate-fade-in" v-loading="loading">
+  <div class="space-y-6" v-loading="loading">
     <section class="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
       <div class="grid gap-6 p-6 md:p-8 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <div class="rounded-2xl border border-gray-100 bg-gray-50 p-5">
           <div class="flex flex-col gap-5">
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h1 class="text-lg font-semibold text-gray-900">服务状态</h1>
-                <p class="mt-1 text-sm text-gray-500">会员有效期与 Emby 访问状态</p>
+                <h1 class="text-2xl font-bold text-gray-900">服务状态</h1>
               </div>
               <span
                 class="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium"

@@ -19,7 +19,7 @@ const props = withDefaults(defineProps<{
     fontWeight: '600'
   }),
   headerClass: 'border-b border-gray-100 px-5 py-4',
-  footerClass: 'flex justify-end border-t border-gray-100 bg-gray-50/50 p-6'
+  footerClass: 'flex flex-wrap justify-end border-t border-gray-100 bg-gray-50/50 px-4 py-4 sm:p-6 overflow-x-auto'
 })
 
 const slots = useSlots()

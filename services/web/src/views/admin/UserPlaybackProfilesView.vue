@@ -190,6 +190,15 @@ const handleSearch = () => {
   fetchData()
 }
 
+/**
+ * 切换每页条数时将页码重置为第 1 页再重新拉取，避免在高页码放大每页条数后请求越界空页。
+ */
+const handlePageSizeChange = (size: number) => {
+  queryParams.value.pageSize = size
+  queryParams.value.page = 1
+  fetchData()
+}
+
 const handleRangeChange = (range: PlaybackProfileRange) => {
   rangeAnchorDate.value = null
   queryParams.value = {
@@ -302,11 +311,11 @@ onMounted(() => {
       </div>
 
       <EmberFilterPanel
-        wrapper-class="flex flex-col gap-3"
-        content-class="flex flex-col gap-3"
-        actions-class="hidden"
+        wrapper-class="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end"
+        content-class="contents"
+        actions-class="flex items-center justify-end gap-2 self-end xl:ml-auto xl:shrink-0"
       >
-        <div class="flex flex-col gap-3 xl:flex-row xl:items-end">
+        <div class="flex flex-col gap-3 xl:col-span-2 xl:flex-row xl:items-end">
           <div class="w-full xl:w-auto xl:shrink-0">
             <EmberSegmentTabs
               :model-value="queryParams.range ?? 'today'"
@@ -337,35 +346,33 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="flex flex-col gap-3 xl:flex-row xl:items-end">
-          <div class="w-full xl:max-w-xs">
-            <EmberSearchInput
-              v-model="queryParams.keyword"
-              label="用户名"
-              aria-label="按用户名筛选"
-              placeholder="输入用户名筛选"
-              :icon="UserFilled"
-              @enter="handleSearch"
-            />
-          </div>
-
-          <div class="flex items-end justify-end gap-2 xl:ml-auto xl:shrink-0">
-            <button
-              @click="handleReset"
-              class="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-700 transition-colors hover:bg-gray-100"
-            >
-              <el-icon><RefreshRight /></el-icon>
-              重置
-            </button>
-            <button
-              @click="handleSearch"
-              class="btn-ember inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm hover:shadow-md active:scale-[0.99]"
-            >
-              <el-icon><Search /></el-icon>
-              查询
-            </button>
-          </div>
+        <div class="w-full xl:max-w-xs">
+          <EmberSearchInput
+            v-model="queryParams.keyword"
+            label="用户名"
+            aria-label="按用户名筛选"
+            placeholder="输入用户名筛选"
+            :icon="UserFilled"
+            @enter="handleSearch"
+          />
         </div>
+
+        <template #actions>
+          <button
+            @click="handleReset"
+            class="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm text-gray-700 transition-colors hover:bg-gray-100"
+          >
+            <el-icon><RefreshRight /></el-icon>
+            重置
+          </button>
+          <button
+            @click="handleSearch"
+            class="btn-ember inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm hover:shadow-md active:scale-[0.99]"
+          >
+            <el-icon><Search /></el-icon>
+            查询
+          </button>
+        </template>
       </EmberFilterPanel>
     </EmberPageHeaderCard>
 
@@ -479,7 +486,7 @@ onMounted(() => {
           :page-sizes="[20, 50, 100]"
           layout="total, sizes, prev, pager, next, jumper"
           @current-change="fetchData"
-          @size-change="fetchData"
+          @size-change="handlePageSizeChange"
           background
         />
       </template>

@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { CreditCard, Money, Ticket, Clock } from '@element-plus/icons-vue'
 import EmberEmptyStateCard from '@/components/ember/feedback/EmberEmptyStateCard.vue'
 import EmberTableCard from '@/components/ember/data-display/EmberTableCard.vue'
+import EmberPageHeaderCard from '@/components/ember/layout/EmberPageHeaderCard.vue'
 import EmberSegmentTabs from '@/components/ember/layout/EmberSegmentTabs.vue'
 import { createCheckout, getActivePlans, getMyPayments } from '@/api/console'
 import { refreshConsoleProfileKey, type RefreshConsoleProfile } from '@/constants/consoleProfile'
@@ -226,24 +227,17 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-6">
-    <section class="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-      <div class="border-b border-gray-100 bg-gray-50/50 px-6 py-5 md:px-7">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h2 class="text-2xl font-bold text-gray-900">续费方式</h2>
-            <p class="mt-1 text-sm text-gray-500">选择在线购买或使用兑换码完成续费</p>
-          </div>
+    <EmberPageHeaderCard title="续费中心">
+      <template #actions>
+        <EmberSegmentTabs
+          v-model="activeRenewalTab"
+          :tabs="renewalSegmentTabs"
+          :full-width="false"
+          ariaLabel="续费方式切换"
+        />
+      </template>
 
-          <EmberSegmentTabs
-            v-model="activeRenewalTab"
-            :tabs="renewalSegmentTabs"
-            :full-width="false"
-            ariaLabel="续费方式切换"
-          />
-        </div>
-      </div>
-
-      <div class="p-4 md:p-7">
+      <div class="mt-6">
         <template v-if="activeRenewalTab === 'online'">
           <div class="flex flex-col gap-6" v-loading="plansLoading">
             <div>
@@ -324,6 +318,7 @@ onMounted(async () => {
 
                   <el-input
                     v-model="redeemForm.code"
+                    aria-label="兑换码"
                     placeholder="在此输入兑换码"
                     class="input-ember"
                     size="large"
@@ -343,12 +338,12 @@ onMounted(async () => {
           </div>
         </template>
       </div>
-    </section>
+    </EmberPageHeaderCard>
 
     <section class="space-y-4">
       <div class="rounded-2xl border border-gray-100 bg-white px-6 py-4 shadow-sm">
         <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <h2 class="text-2xl font-bold text-gray-900">历史记录</h2>
+          <h2 class="text-xl font-bold text-gray-900">历史记录</h2>
 
           <EmberSegmentTabs
             v-model="activeHistoryTab"
@@ -410,7 +405,7 @@ onMounted(async () => {
             v-model:page-size="paymentQuery.pageSize"
             :total="paymentTotal"
             :page-sizes="[10, 20, 50]"
-            layout="total, sizes, prev, pager, next"
+            layout="total, sizes, prev, pager, next, jumper"
             @current-change="fetchPayments"
             @size-change="handlePaymentPageSizeChange"
             background
@@ -444,7 +439,7 @@ onMounted(async () => {
             v-model:page-size="redemptionQuery.pageSize"
             :total="redemptionTotal"
             :page-sizes="[10, 20, 50]"
-            layout="total, sizes, prev, pager, next"
+            layout="total, sizes, prev, pager, next, jumper"
             @current-change="fetchRedemptions"
             @size-change="handleRedemptionPageSizeChange"
             background

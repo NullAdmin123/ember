@@ -28,7 +28,7 @@ onUnmounted(() => {
     <div class="max-w-[1400px] mx-auto px-6">
       <div class="flex justify-between items-center">
         <!-- Logo -->
-        <router-link to="/" class="flex items-center gap-2 group">
+        <router-link to="/" class="flex items-center gap-2 group cursor-pointer">
           <div class="w-8 h-8 bg-ember rounded-lg flex items-center justify-center text-white font-black text-lg transform group-hover:rotate-12 transition-transform">E</div>
           <span class="text-2xl font-black tracking-tighter text-gray-900 group-hover:text-ember transition-colors">EMBER</span>
         </router-link>
@@ -36,10 +36,10 @@ onUnmounted(() => {
         <!-- Desktop Navigation -->
         <div class="hidden md:flex items-center gap-4">
           <ProjectSourceLink :show-commit="false" />
-          <router-link to="/login" class="text-sm font-bold text-gray-900 hover:text-ember transition-colors">
+          <router-link to="/login" class="text-sm font-bold text-gray-900 hover:text-ember transition-colors cursor-pointer">
             登录
           </router-link>
-          <router-link to="/register" class="px-5 py-2.5 btn-ember text-sm font-bold rounded-xl">
+          <router-link to="/register" class="px-5 py-2.5 btn-ember text-sm font-bold rounded-xl cursor-pointer">
             立即体验
           </router-link>
         </div>
@@ -68,8 +68,8 @@ onUnmounted(() => {
           <div class="flex">
             <ProjectSourceLink :show-commit="false" />
           </div>
-          <router-link to="/login" class="text-lg font-bold text-gray-900" @click="mobileMenuOpen = false">登录</router-link>
-          <router-link to="/register" class="text-lg font-bold text-ember" @click="mobileMenuOpen = false">立即体验</router-link>
+          <router-link to="/login" class="text-lg font-bold text-gray-900 cursor-pointer" @click="mobileMenuOpen = false">登录</router-link>
+          <router-link to="/register" class="text-lg font-bold text-ember cursor-pointer" @click="mobileMenuOpen = false">立即体验</router-link>
         </div>
       </div>
     </div>

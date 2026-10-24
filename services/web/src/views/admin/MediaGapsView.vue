@@ -1036,9 +1036,9 @@ watch(sortMode, () => {
       </div>
 
       <EmberFilterPanel
-        wrapper-class="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,max-content)_auto] 2xl:items-end"
-        content-class="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-[320px_220px_minmax(320px,420px)] 2xl:items-end"
-        actions-class="flex flex-wrap items-center justify-end gap-2"
+        wrapper-class="flex flex-col gap-3 2xl:flex-row 2xl:items-end"
+        content-class="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_180px_minmax(0,1.4fr)] xl:items-end"
+        actions-class="flex flex-wrap items-center justify-end gap-2 self-end 2xl:ml-auto 2xl:shrink-0"
       >
         <EmberSearchInput
           v-model="queryParams.keyword"
@@ -1321,7 +1321,7 @@ watch(sortMode, () => {
         description="可以先触发全库扫描，或者调整筛选条件后再看。"
       />
 
-      <div class="rounded-2xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
+      <div class="flex justify-end rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
         <el-pagination
           v-model:current-page="queryParams.page"
           v-model:page-size="queryParams.pageSize"
@@ -1513,10 +1513,12 @@ watch(sortMode, () => {
           </div>
 
           <div class="max-h-[420px] space-y-3 overflow-y-auto pr-1">
-            <div
+            <button
               v-for="candidate in candidateResult.candidates"
               :key="candidate.id"
-              class="candidate-card"
+              type="button"
+              :aria-pressed="candidate.id === selectedCandidateId"
+              class="candidate-card w-full text-left"
               :class="{ 'candidate-card--active': candidate.id === selectedCandidateId }"
               @click="selectedCandidateId = candidate.id"
             >
@@ -1565,7 +1567,7 @@ watch(sortMode, () => {
                   </div>
                 </div>
               </div>
-            </div>
+            </button>
           </div>
         </div>
 

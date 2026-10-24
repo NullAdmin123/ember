@@ -259,14 +259,13 @@ services/
 │  │     ├─ console/             # 统一控制台（admin + user 共享布局）
 │  │     │  ├─ Layout.vue        # 控制台布局
 │  │     │  ├─ DashboardView.vue # 概览页（会员状态 / 媒体统计 / 服务器入口 / 最近入库摘要 / Emby 桥接）
-│  │     │  ├─ AccountCenterView.vue # 账号中心（邮箱 / 密码 / Telegram 绑定 / 媒体库偏好 / 帮助资源）
+│  │     │  ├─ AccountCenterView.vue # 账号中心（邮箱 / 密码 / Telegram 绑定 / 媒体库偏好 / 115 播放账号）
 │  │     │  ├─ ProfileAnalyticsView.vue # 我的画像
 │  │     │  ├─ SubscriptionsView.vue  # 求片订阅
 │  │     │  ├─ NewSubscriptionView.vue # 新建订阅
 │  │     │  ├─ TVCalendarView.vue # 追剧日历
 │  │     │  ├─ RankingsView.vue  # 播放排行
-│  │     │  ├─ RenewalCenterView.vue # 续费中心（支付 + 兑换码）
-│  │     │  └─ P115AccountView.vue  # 普通用户个人 115 playback 四步配置与用量
+│  │     │  └─ RenewalCenterView.vue # 续费中心（支付 + 兑换码）
 │  │     └─ admin/               # 管理后台
 │  │        ├─ UserCenterView.vue # 用户中心（用户管理）
 │  │        ├─ UsersView.vue     # 用户管理（筛选 / 后台创建 / 编辑）
@@ -284,6 +283,7 @@ services/
 │  │        ├─ SessionsView.vue  # 活跃会话
 │  │        ├─ PlaybackHistoryView.vue # 播放历史（嵌入播放中心容器）
 │  │        ├─ MediaQualityView.vue # 媒体质量盘点
+│  │        ├─ MediaGapsView.vue # 缺集管理
 │  │        └─ DevicesView.vue   # 设备管理
 │  ├─ vite.config.ts             # dev:3000, proxy /api→:8080, build manualChunks 分包
 │  └─ tailwind.config.js         # 自定义色：ember(橙红), cinema

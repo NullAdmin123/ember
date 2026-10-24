@@ -226,7 +226,7 @@ const handleLogin = async () => {
 
     <div class="w-full max-w-md relative z-10 animate-fade-in">
 
-      <router-link to="/" class="inline-flex items-center text-text-secondary hover:text-ember mb-8 transition-colors text-sm group">
+      <router-link to="/" class="inline-flex items-center text-text-secondary hover:text-ember mb-8 transition-colors text-sm group cursor-pointer">
         <el-icon class="mr-1 transition-transform group-hover:-translate-x-1"><ArrowLeft /></el-icon>
         返回首页
       </router-link>
@@ -237,8 +237,7 @@ const handleLogin = async () => {
           <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-ember/10 text-ember mb-4">
             <el-icon class="text-2xl"><User /></el-icon>
           </div>
-          <h1 class="text-2xl font-bold text-text-primary tracking-tight mb-2">欢迎回来</h1>
-          <p class="text-text-secondary text-sm">登录您的 Ember 账号</p>
+          <h1 class="text-2xl font-bold text-text-primary tracking-tight">欢迎回来</h1>
         </div>
 
         <EmberEmptyStateCard
@@ -327,11 +326,11 @@ const handleLogin = async () => {
 
         <div class="mt-8 pt-6 border-t border-gray-100">
           <div class="flex items-center justify-center gap-6 text-sm">
-            <router-link to="/forgot-password" class="text-text-secondary hover:text-ember transition-colors font-medium">
+            <router-link to="/forgot-password" class="text-text-secondary hover:text-ember transition-colors font-medium cursor-pointer">
               忘记密码？
             </router-link>
             <span class="text-gray-200">|</span>
-            <router-link to="/register" class="text-text-secondary hover:text-ember transition-colors font-medium">
+            <router-link to="/register" class="text-text-secondary hover:text-ember transition-colors font-medium cursor-pointer">
               注册新账号
             </router-link>
           </div>

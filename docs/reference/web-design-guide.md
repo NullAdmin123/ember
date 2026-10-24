@@ -386,7 +386,7 @@
 - 默认使用 `align-center`，容器圆角保持 `rounded-2xl`。
 - 表单优先 `label-position="top"`，避免左对齐标签压缩横向空间。
 - 开关、状态切换等组合控件优先放进 `border border-gray-200 rounded-xl bg-gray-50` 容器，避免裸露控件漂浮。
-- 通用新建/编辑弹窗默认优先使用 `EmberFormDialog`，不要在每个页面重复覆盖 `el-dialog__header`、`el-dialog__body`、`el-dialog__footer`。
+- 通用新建/编辑弹窗默认优先使用 `EmberFormDialog`：组件自动将固定像素宽度（如 `520px`、`680px`）转换为 `min(<width>, calc(100vw - 2rem))` 以防止移动端横向溢出，并通过全局 `.ember-form-dialog` 统一承载 `.el-dialog__header`、`.el-dialog__body`、`.el-dialog__footer` 的内边距与分割线，不要在每个页面重复包裹 `p-6 pt-2` 或 `px-6 pb-6`。
 - 当弹窗只是在做标准后台表单时，应先复用通用容器，再决定是否需要局部补样式；不要反过来先写一套局部 dialog 再讨论是否抽组件。
 - 若弹窗内容高度定制、暂时不能直接接入 `EmberFormDialog`，也必须复用统一 dialog chrome（当前对应 `ember-form-dialog` 语义），不要再做第三套 header / body / footer 样式。
 - 弹窗内部字段继续遵守全局表单基线：文本输入用 `input-ember`，普通下拉用 `form-select`，日期输入用 `form-date`，数字输入用 `form-number`。

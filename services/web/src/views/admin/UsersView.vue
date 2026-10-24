@@ -809,7 +809,6 @@ const entitlementUser = ref<UserInfo | null>(null)
     <EmberPageHeaderCard
       :hide-title="props.embedded"
       title="用户管理"
-      description="管理系统注册用户、人工开通账号及其权限状态"
     >
       <template #titleSuffix>
         <span class="rounded-full bg-gray-100 px-2 py-1 text-xs font-normal text-gray-500">共 {{ total }} 个用户</span>
@@ -1115,7 +1114,7 @@ const entitlementUser = ref<UserInfo | null>(null)
       width="920px"
       class="rounded-2xl"
     >
-      <div v-if="syncPreview && syncPreviewGroup" class="space-y-5 p-6 pt-2">
+      <div v-if="syncPreview && syncPreviewGroup" class="space-y-5">
         <div class="grid gap-3 md:grid-cols-4">
           <div class="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
             <div class="text-xs font-medium text-gray-500">套餐组</div>
@@ -1224,7 +1223,7 @@ const entitlementUser = ref<UserInfo | null>(null)
         </div>
       </div>
       <template #footer>
-        <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-3">
           <button
             @click="syncPreviewDialogVisible = false"
             class="cursor-pointer rounded-xl px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
@@ -1248,7 +1247,7 @@ const entitlementUser = ref<UserInfo | null>(null)
       width="560px"
       class="rounded-2xl"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form label-position="top" class="space-y-4">
           <el-form-item label="用户名">
             <el-input
@@ -1324,7 +1323,7 @@ const entitlementUser = ref<UserInfo | null>(null)
         </el-form>
       </div>
       <template #footer>
-        <div class="px-6 pb-6 pt-0 flex justify-end gap-3">
+        <div class="flex justify-end gap-3">
           <button
             @click="createDialogVisible = false"
             class="px-4 py-2.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-colors font-medium cursor-pointer"
@@ -1349,7 +1348,7 @@ const entitlementUser = ref<UserInfo | null>(null)
       width="520px"
       class="rounded-2xl"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form label-position="top" class="space-y-4">
           <el-form-item label="电子邮箱">
             <el-input 
@@ -1402,7 +1401,7 @@ const entitlementUser = ref<UserInfo | null>(null)
         </el-form>
       </div>
       <template #footer>
-        <div class="px-6 pb-6 pt-0 flex justify-end gap-3">
+        <div class="flex justify-end gap-3">
           <button 
             @click="editDialogVisible = false"
             class="px-4 py-2.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-colors font-medium cursor-pointer"

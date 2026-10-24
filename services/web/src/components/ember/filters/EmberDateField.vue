@@ -42,6 +42,7 @@ const handleChange = (value: string | null | undefined) => {
       <el-date-picker
         :model-value="props.modelValue"
         :placeholder="props.placeholder"
+        :aria-label="props.label"
         class="w-full ember-filter-date"
         v-bind="$attrs"
         @update:model-value="handleUpdate"

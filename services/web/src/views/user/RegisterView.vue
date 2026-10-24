@@ -202,7 +202,7 @@ onBeforeUnmount(() => {
     <div class="absolute bottom-[10%] -left-[10%] w-[40%] h-[40%] bg-gray-50 opacity-60 blur-[80px] rounded-full pointer-events-none"></div>
 
     <div class="w-full max-w-md relative z-10 animate-fade-in">
-      <router-link to="/" class="inline-flex items-center text-text-secondary hover:text-ember mb-8 transition-colors text-sm group">
+      <router-link to="/" class="inline-flex items-center text-text-secondary hover:text-ember mb-8 transition-colors text-sm group cursor-pointer">
         <el-icon class="mr-1 transition-transform group-hover:-translate-x-1"><ArrowLeft /></el-icon>
         返回首页
       </router-link>
@@ -212,8 +212,7 @@ onBeforeUnmount(() => {
           <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-ember/10 text-ember mb-4">
             <el-icon class="text-2xl"><User /></el-icon>
           </div>
-          <h1 class="text-2xl font-bold text-text-primary tracking-tight mb-2">用户注册</h1>
-          <p class="text-text-secondary text-sm">创建您的 Ember 账号</p>
+          <h1 class="text-2xl font-bold text-text-primary tracking-tight">用户注册</h1>
         </div>
 
         <el-form :model="form" @submit.prevent="handleRegister" size="large" class="space-y-6">
@@ -313,7 +312,7 @@ onBeforeUnmount(() => {
 
         <div class="mt-8 pt-6 border-t border-gray-100">
           <div class="flex items-center justify-center gap-6 text-sm">
-            <router-link to="/login" class="text-text-secondary hover:text-ember transition-colors font-medium">
+            <router-link to="/login" class="text-text-secondary hover:text-ember transition-colors font-medium cursor-pointer">
               已有账号？立即登录
             </router-link>
           </div>

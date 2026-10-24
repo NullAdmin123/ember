@@ -202,7 +202,7 @@ onBeforeUnmount(() => {
         aria-controls="console-help-panel"
         :aria-expanded="panelOpen"
         :aria-label="panelOpen ? '收起帮助与资源' : '打开帮助与资源'"
-        class="group flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-white text-slate-700 shadow-lg shadow-slate-900/10 transition-all duration-200 hover:border-ember/30 sm:h-14 sm:w-[3.5rem] sm:justify-end sm:rounded-l-full sm:rounded-r-none sm:border-r-0 sm:pl-4 sm:pr-3"
+        class="group flex h-14 w-14 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-white text-slate-700 shadow-lg shadow-slate-900/10 transition-all duration-200 hover:border-ember/30 sm:h-14 sm:w-[3.5rem] sm:justify-end sm:rounded-l-full sm:rounded-r-none sm:border-r-0 sm:pl-4 sm:pr-3"
         :class="panelOpen ? 'border-ember/40 sm:w-[7.5rem]' : 'sm:hover:w-[7.5rem]'"
         @click="togglePanel"
       >

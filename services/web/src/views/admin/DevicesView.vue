@@ -4,6 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Iphone, Plus, RefreshRight, Search, WarningFilled, SwitchButton } from '@element-plus/icons-vue'
 import EmberMetricCard from '@/components/ember/data-display/EmberMetricCard.vue'
 import EmberTableCard from '@/components/ember/data-display/EmberTableCard.vue'
+import EmberEmptyStateCard from '@/components/ember/feedback/EmberEmptyStateCard.vue'
 import EmberSearchInput from '@/components/ember/filters/EmberSearchInput.vue'
 import EmberSelectField from '@/components/ember/filters/EmberSelectField.vue'
 import EmberFilterPanel from '@/components/ember/layout/EmberFilterPanel.vue'
@@ -276,24 +277,20 @@ onMounted(refreshAll)
           v-loading="statsLoading"
           title="活跃播放会话"
           :value="stats.activeSessionCount"
-          detail="当前在线播放设备数"
         />
         <EmberMetricCard
           v-loading="statsLoading"
           title="黑名单客户端"
           :value="stats.blacklistedClientCount"
-          detail="命中后可统一执行下线"
         />
         <EmberMetricCard
           title="当前页命中黑名单"
           :value="blacklistedInCurrentPage"
-          detail="随当前分页结果变化"
         />
         <EmberMetricCard
           v-loading="statsLoading"
           title="客户端种类数"
           :value="stats.clientDistribution.length"
-          detail="按客户端名称聚合"
         />
       </div>
 
@@ -354,77 +351,73 @@ onMounted(refreshAll)
     </EmberPageHeaderCard>
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-      <div class="bg-white border border-gray-100 rounded-2xl shadow-sm p-6 space-y-4">
-        <div class="flex items-center justify-between">
-          <h2 class="text-lg font-bold text-gray-900">客户端黑名单</h2>
-          <button
-            type="button"
-            @click="handleLogoutBlacklistedDevices"
-            :disabled="batchProcessing"
-            class="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 disabled:opacity-60 cursor-pointer"
-          >
-            <el-icon><SwitchButton /></el-icon>
-            一键注销黑名单设备
-          </button>
-        </div>
-
-        <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <div class="space-y-1.5">
-            <label class="text-xs font-semibold tracking-wide text-gray-500">客户端名称</label>
-            <el-input
-              v-model="blacklistForm.clientName"
-              placeholder="客户端名称，例如 Infuse"
-              aria-label="客户端名称"
-              class="input-ember"
-            />
-          </div>
-          <div class="space-y-1.5">
-            <label class="text-xs font-semibold tracking-wide text-gray-500">原因</label>
-            <el-input
-              v-model="blacklistForm.reason"
-              placeholder="原因（可选）"
-              aria-label="黑名单原因"
-              class="input-ember"
-            />
-          </div>
-          <div class="flex items-end">
-            <button
-              type="button"
-              @click="handleAddBlacklist"
-              :disabled="submitting"
-              class="btn-ember flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold cursor-pointer"
-            >
-              <el-icon><Plus /></el-icon>
-              添加黑名单
-            </button>
-          </div>
-        </div>
-
-        <el-table
-          :data="blacklists"
-          v-loading="blacklistsLoading"
-          size="small"
-          style="width: 100%"
-          :header-cell-style="{ background: '#f9fafb', color: '#6b7280', fontWeight: '600' }"
-        >
-          <el-table-column prop="clientName" label="客户端" min-width="140" />
-          <el-table-column prop="reason" label="原因" min-width="150" />
-          <el-table-column label="创建时间" min-width="170">
-            <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="120" fixed="right">
-            <template #default="{ row }">
+      <EmberTableCard :data="blacklists" :loading="blacklistsLoading" size="small">
+        <template #header>
+          <div class="space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h2 class="text-lg font-bold text-gray-900">客户端黑名单</h2>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 cursor-pointer"
-                @click="handleRemoveBlacklist(row.clientName)"
+                @click="handleLogoutBlacklistedDevices"
+                :disabled="batchProcessing"
+                class="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 disabled:opacity-60 cursor-pointer"
               >
-                移除
+                <el-icon><SwitchButton /></el-icon>
+                一键注销黑名单设备
               </button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div class="space-y-1.5">
+                <label class="text-xs font-semibold tracking-wide text-gray-500">客户端名称</label>
+                <el-input
+                  v-model="blacklistForm.clientName"
+                  placeholder="客户端名称，例如 Infuse"
+                  aria-label="客户端名称"
+                  class="input-ember"
+                />
+              </div>
+              <div class="space-y-1.5">
+                <label class="text-xs font-semibold tracking-wide text-gray-500">原因</label>
+                <el-input
+                  v-model="blacklistForm.reason"
+                  placeholder="原因（可选）"
+                  aria-label="黑名单原因"
+                  class="input-ember"
+                />
+              </div>
+              <div class="flex items-end">
+                <button
+                  type="button"
+                  @click="handleAddBlacklist"
+                  :disabled="submitting"
+                  class="btn-ember flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold cursor-pointer"
+                >
+                  <el-icon><Plus /></el-icon>
+                  添加黑名单
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <el-table-column prop="clientName" label="客户端" min-width="140" />
+        <el-table-column prop="reason" label="原因" min-width="150" />
+        <el-table-column label="创建时间" min-width="170">
+          <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <button
+              type="button"
+              class="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-sm font-semibold text-red-600 transition-colors hover:bg-red-100 cursor-pointer"
+              @click="handleRemoveBlacklist(row.clientName)"
+            >
+              移除
+            </button>
+          </template>
+        </el-table-column>
+      </EmberTableCard>
 
       <div class="bg-white border border-gray-100 rounded-2xl shadow-sm p-6">
         <h2 class="text-lg font-bold text-gray-900 mb-4">设备分布 Top</h2>
@@ -437,7 +430,12 @@ onMounted(refreshAll)
             <span class="text-sm text-gray-700 truncate">{{ item.deviceName }}</span>
             <span class="text-xs font-semibold text-gray-500">{{ item.count }}</span>
           </div>
-          <div v-if="stats.topDevices.length === 0" class="text-sm text-gray-400">暂无数据</div>
+          <EmberEmptyStateCard
+            v-if="stats.topDevices.length === 0"
+            title="暂无设备分布数据"
+            description="待客户端产生播放活动后自动统计。"
+            compact
+          />
         </div>
       </div>
     </div>
@@ -494,29 +492,24 @@ onMounted(refreshAll)
       </template>
     </EmberTableCard>
 
-    <div class="bg-white border border-gray-100 rounded-2xl shadow-sm p-6">
-      <div class="flex items-center gap-2 mb-4">
-        <el-icon class="text-orange-500"><WarningFilled /></el-icon>
-        <h2 class="text-lg font-bold text-gray-900">最近操作日志</h2>
-      </div>
-      <el-table
-        :data="actions"
-        v-loading="actionsLoading"
-        size="small"
-        style="width: 100%"
-        :header-cell-style="{ background: '#f9fafb', color: '#6b7280', fontWeight: '600' }"
-      >
-        <el-table-column label="操作" width="130">
-          <template #default="{ row }">{{ actionLabelMap[row.action] || row.action }}</template>
-        </el-table-column>
-        <el-table-column prop="clientName" label="客户端" min-width="140" />
-        <el-table-column prop="deviceId" label="设备ID" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="userId" label="用户ID" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="note" label="备注" min-width="150" />
-        <el-table-column label="时间" min-width="180">
-          <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
-        </el-table-column>
-      </el-table>
-    </div>
+    <EmberTableCard :data="actions" :loading="actionsLoading" size="small">
+      <template #header>
+        <div class="flex items-center gap-2">
+          <el-icon class="text-orange-500"><WarningFilled /></el-icon>
+          <h2 class="text-lg font-bold text-gray-900">最近操作日志</h2>
+        </div>
+      </template>
+
+      <el-table-column label="操作" width="130">
+        <template #default="{ row }">{{ actionLabelMap[row.action] || row.action }}</template>
+      </el-table-column>
+      <el-table-column prop="clientName" label="客户端" min-width="140" />
+      <el-table-column prop="deviceId" label="设备ID" min-width="180" show-overflow-tooltip />
+      <el-table-column prop="userId" label="用户ID" min-width="160" show-overflow-tooltip />
+      <el-table-column prop="note" label="备注" min-width="150" />
+      <el-table-column label="时间" min-width="180">
+        <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
+      </el-table-column>
+    </EmberTableCard>
   </div>
 </template>

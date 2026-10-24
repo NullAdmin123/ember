@@ -296,7 +296,7 @@ async function submitReview() {
     </EmberPageHeaderCard>
 
     <EmberTableCard :data="tableData" :loading="loading">
-      <el-table-column label="用户" min-width="220">
+      <el-table-column label="用户" min-width="180">
         <template #default="{ row }">
           <div class="space-y-1">
             <div class="font-semibold text-gray-900">{{ row.username || '-' }}</div>
@@ -305,19 +305,19 @@ async function submitReview() {
         </template>
       </el-table-column>
 
-      <el-table-column label="方案" min-width="180">
+      <el-table-column label="方案" min-width="150">
         <template #default="{ row }">
           <span class="font-medium text-gray-900">{{ row.planName || '未知方案' }}</span>
         </template>
       </el-table-column>
 
-      <el-table-column label="金额" width="140">
+      <el-table-column label="金额" width="130">
         <template #default="{ row }">
           <span class="font-semibold text-gray-900">{{ formatPrice(row.amount, row.currency) }}</span>
         </template>
       </el-table-column>
 
-      <el-table-column label="购买权益" min-width="180"><template #default="{ row }"><div v-for="benefit in row.benefits" :key="benefit.planGroup">{{ benefitText(benefit) }}</div><span v-if="!row.benefits?.length">历史订单 · {{ row.days }} 天</span></template></el-table-column>
+      <el-table-column label="购买权益" min-width="160"><template #default="{ row }"><div v-for="benefit in row.benefits" :key="benefit.planGroup">{{ benefitText(benefit) }}</div><span v-if="!row.benefits?.length">历史订单 · {{ row.days }} 天</span></template></el-table-column>
 
       <el-table-column label="状态" width="120" align="center">
         <template #default="{ row }">
@@ -327,27 +327,28 @@ async function submitReview() {
         </template>
       </el-table-column>
 
-      <el-table-column label="人工处理" min-width="200"><template #default="{ row }">
-        <button v-if="row.status === 'paid_review'" class="btn-ember px-3 py-2" @click="openReview(row)">处理订单</button>
-        <span v-else>{{ row.resolutionNote || '—' }}</span>
-      </template></el-table-column>
-      <el-table-column prop="stripeSessionId" label="Session ID" min-width="220" show-overflow-tooltip>
+      <el-table-column prop="stripeSessionId" label="Session ID" min-width="180" show-overflow-tooltip>
         <template #default="{ row }">
           <code class="text-xs text-gray-600">{{ row.stripeSessionId || '-' }}</code>
         </template>
       </el-table-column>
 
-      <el-table-column prop="stripePaymentIntentId" label="Payment Intent" min-width="220" show-overflow-tooltip>
+      <el-table-column prop="stripePaymentIntentId" label="Payment Intent" min-width="180" show-overflow-tooltip>
         <template #default="{ row }">
           <code class="text-xs text-gray-600">{{ row.stripePaymentIntentId || '-' }}</code>
         </template>
       </el-table-column>
 
-      <el-table-column label="支付时间" min-width="170">
+      <el-table-column label="支付时间" min-width="160">
         <template #default="{ row }">
           <span class="text-gray-600">{{ formatDate(row.createdAt) }}</span>
         </template>
       </el-table-column>
+
+      <el-table-column label="人工处理" min-width="150" fixed="right"><template #default="{ row }">
+        <button v-if="row.status === 'paid_review'" class="btn-ember cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold" @click="openReview(row)">处理订单</button>
+        <span v-else>{{ row.resolutionNote || '—' }}</span>
+      </template></el-table-column>
 
       <template #pagination>
         <el-pagination
@@ -364,12 +365,31 @@ async function submitReview() {
     </EmberTableCard>
   </div>
   <EmberFormDialog :model-value="!!reviewPayment" title="处理已付款订单" width="680px" @update:model-value="value => { if (!value) reviewPayment = null }">
-    <el-form label-position="top" class="space-y-4 p-6">
+    <el-form label-position="top" class="space-y-4">
       <p class="text-sm text-gray-600">{{ reviewPayment?.manualReviewReason === 'already_owned' ? '付款时已拥有对应永久权益' : '订单权益信息无法确定，需要人工核对' }}</p>
       <el-form-item label="处理方式"><el-select v-model="resolution" class="form-select w-full"><el-option label="记录线下已退款" value="external_refund" /><el-option label="发放补偿权益" value="compensation" /></el-select></el-form-item>
       <PlanBenefitsEditor v-if="resolution === 'compensation'" v-model="compensationBenefits" :groups="reviewGroups" />
       <el-form-item label="处理记录"><el-input v-model="resolutionNote" type="textarea" :maxlength="500" class="input-ember" /></el-form-item>
     </el-form>
-    <template #footer><button class="btn-ember px-4 py-2.5" :disabled="resolving" @click="submitReview">{{ resolving ? '处理中…' : '确认处理' }}</button></template>
+    <template #footer>
+      <div class="flex justify-end gap-3">
+        <button
+          type="button"
+          class="cursor-pointer rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+          :disabled="resolving"
+          @click="reviewPayment = null"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          class="btn-ember cursor-pointer rounded-xl px-5 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+          :disabled="resolving"
+          @click="submitReview"
+        >
+          {{ resolving ? '处理中…' : '确认处理' }}
+        </button>
+      </div>
+    </template>
   </EmberFormDialog>
 </template>

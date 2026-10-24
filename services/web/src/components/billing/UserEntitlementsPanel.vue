@@ -66,7 +66,7 @@ watch(() => props.userId, () => { operationId = ''; void load() }, { immediate: 
 </script>
 
 <template>
-  <section v-loading="loading" class="space-y-4" :class="userId ? 'p-6 pt-2' : 'rounded-2xl border border-gray-100 bg-white p-4 sm:p-6'">
+  <section v-loading="loading" class="space-y-4" :class="userId ? '' : 'rounded-2xl border border-gray-100 bg-white p-4 sm:p-6'">
     <h2 class="text-base font-semibold text-gray-900">持有权益</h2>
     <div v-if="failed" role="alert" class="text-sm text-red-600">权益加载失败 <button class="cursor-pointer underline" @click="load">重试</button></div>
     <p v-else-if="!loading && !rows.length" class="text-sm text-gray-500">暂无权益</p>

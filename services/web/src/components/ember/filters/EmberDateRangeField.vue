@@ -40,6 +40,7 @@ const handleChange = (value: [string, string] | [] | null | undefined) => {
       </div>
       <el-date-picker
         :model-value="props.modelValue"
+        :aria-label="props.label"
         class="w-full ember-filter-date-range"
         v-bind="$attrs"
         @update:model-value="handleUpdate"
@@ -52,8 +53,9 @@ const handleChange = (value: [string, string] | [] | null | undefined) => {
 
 <style scoped>
 :deep(.ember-filter-date-range .el-range-input) {
-  width: 11rem;
-  min-width: 11rem;
+  flex: 1 1 0%;
+  width: 0;
+  min-width: 0;
   background-color: transparent;
   font-size: 0.875rem;
 }

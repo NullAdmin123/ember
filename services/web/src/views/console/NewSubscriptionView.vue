@@ -265,7 +265,7 @@ const isConfirmDisabled = () => {
 </script>
 
 <template>
-  <div class="mx-auto max-w-7xl space-y-8">
+  <div class="space-y-6">
     <EmberPageHeaderCard title="添加新订阅">
       <div class="mx-auto mt-6 flex max-w-3xl flex-col gap-4">
         <div class="flex justify-center">
@@ -337,7 +337,7 @@ const isConfirmDisabled = () => {
         <button
           type="button"
           @click="handleSearch"
-          class="rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50"
+          class="cursor-pointer rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50"
         >
           重新搜索
         </button>
@@ -442,11 +442,11 @@ const isConfirmDisabled = () => {
         </div>
       </div>
       <template #footer>
-        <div class="flex flex-col-reverse gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:justify-end">
+        <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <button
             type="button"
             @click="showConfirmDialog = false"
-            class="rounded-xl px-4 py-2 font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+            class="cursor-pointer rounded-xl px-4 py-2 font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
           >
             取消
           </button>
@@ -454,7 +454,7 @@ const isConfirmDisabled = () => {
             type="button"
             @click="confirmSubscription"
             :disabled="isConfirmDisabled()"
-            class="btn-ember inline-flex items-center gap-2 rounded-xl px-6 py-2 font-bold shadow-md transition-colors hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
+            class="btn-ember inline-flex cursor-pointer items-center gap-2 rounded-xl px-6 py-2 font-bold shadow-md transition-colors hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
           >
             <span v-if="submitting || checkingExisting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white"></span>
             <el-icon v-else><Check /></el-icon>

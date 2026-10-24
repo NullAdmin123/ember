@@ -652,7 +652,7 @@ onMounted(fetchData)
 
 <template>
   <div class="space-y-6">
-    <EmberPageHeaderCard title="订阅管理" description="查看和管理你的影视订阅请求。">
+    <EmberPageHeaderCard title="订阅管理">
       <template #titleSuffix>
         <span class="rounded-full bg-gray-100 px-2 py-1 text-xs font-normal text-gray-500">{{ total }} 个订阅</span>
       </template>
@@ -840,7 +840,7 @@ onMounted(fetchData)
       </EmberEmptyStateCard>
     </div>
 
-    <div v-if="total > 0" class="flex justify-end border-t border-gray-100 bg-gray-50/50 p-6">
+    <div v-if="total > 0" class="flex justify-end rounded-2xl border border-gray-100 bg-white p-6 shadow-sm">
       <el-pagination
         v-model:current-page="queryParams.page"
         v-model:page-size="queryParams.pageSize"
@@ -894,7 +894,7 @@ onMounted(fetchData)
                 type="button"
                 @click="handleManualSearch"
                 :disabled="manualSearching || manualDispatching"
-                class="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                class="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 text-sm font-semibold text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <span v-if="manualSearching" class="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-ember"></span>
                 <el-icon v-else><Search /></el-icon>
@@ -953,12 +953,12 @@ onMounted(fetchData)
       </div>
 
       <template #footer>
-        <div class="flex flex-col-reverse gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:justify-end">
+        <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <button
             type="button"
             @click="closeManualDialog"
             :disabled="manualSearching || manualDispatching"
-            class="rounded-xl px-4 py-2 font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+            class="cursor-pointer rounded-xl px-4 py-2 font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
           >
             取消
           </button>
@@ -966,7 +966,7 @@ onMounted(fetchData)
             type="button"
             @click="handleManualDispatch"
             :disabled="manualSearching || manualDispatching || !canDispatchManual"
-            class="btn-ember inline-flex items-center gap-2 rounded-xl px-6 py-2 font-bold shadow-md transition-colors hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
+            class="btn-ember inline-flex cursor-pointer items-center gap-2 rounded-xl px-6 py-2 font-bold shadow-md transition-colors hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
           >
             <span v-if="manualDispatching" class="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white"></span>
             <el-icon v-else><Download /></el-icon>
@@ -1025,12 +1025,12 @@ onMounted(fetchData)
       </div>
 
       <template #footer>
-        <div class="flex flex-col-reverse gap-3 border-t border-gray-100 pt-4 sm:flex-row sm:justify-end">
+        <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <button
             type="button"
             @click="closeResubmitDialog"
             :disabled="resubmitting"
-            class="rounded-xl px-4 py-2 font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+            class="cursor-pointer rounded-xl px-4 py-2 font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
           >
             取消
           </button>
@@ -1038,7 +1038,7 @@ onMounted(fetchData)
             type="button"
             @click="handleResubmit"
             :disabled="resubmitting || !resubmitNote.trim()"
-            class="btn-ember inline-flex items-center gap-2 rounded-xl px-6 py-2 font-bold shadow-md transition-colors hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
+            class="btn-ember inline-flex cursor-pointer items-center gap-2 rounded-xl px-6 py-2 font-bold shadow-md transition-colors hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-70"
           >
             <span v-if="resubmitting" class="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white"></span>
             <el-icon v-else><RefreshRight /></el-icon>

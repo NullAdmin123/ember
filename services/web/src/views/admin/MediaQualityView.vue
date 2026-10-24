@@ -270,7 +270,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="space-y-6">
-    <EmberPageHeaderCard title="媒体库质量盘点" description="按媒体库统计分辨率、编码、HDR 分布并筛出低画质资源。">
+    <EmberPageHeaderCard title="媒体库质量盘点">
       <template #titleSuffix>
         <span
           v-if="report"
@@ -280,10 +280,33 @@ onBeforeUnmount(() => {
         </span>
       </template>
 
+      <template #actions>
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            class="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="loadingReport"
+            @click="loadReport(true)"
+          >
+            <el-icon><RefreshRight /></el-icon>
+            强制刷新
+          </button>
+          <button
+            type="button"
+            class="btn-ember inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="scanning"
+            @click="scanNow"
+          >
+            <el-icon><Cpu /></el-icon>
+            手动重扫
+          </button>
+        </div>
+      </template>
+
       <EmberFilterPanel
-        wrapper-class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.2fr)]"
-        content-class="contents"
-        actions-class="hidden"
+        wrapper-class="flex flex-col gap-3 xl:flex-row xl:items-end"
+        content-class="w-full lg:max-w-md"
+        actions-class="flex items-center gap-2 self-end xl:ml-auto xl:shrink-0"
       >
         <EmberSelectField
           v-model="selectedLibraryId"
@@ -302,38 +325,17 @@ onBeforeUnmount(() => {
           />
         </EmberSelectField>
 
-        <div class="flex items-end">
+        <template #actions>
           <button
             type="button"
-            class="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100"
+            class="btn-ember inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm hover:shadow-md active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="loadingReport"
             @click="loadReport(false)"
           >
             <el-icon><Search /></el-icon>
-            读取报告
+            查询
           </button>
-        </div>
-
-        <div class="flex items-end gap-2">
-          <button
-            type="button"
-            class="inline-flex flex-1 items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-100"
-            :disabled="loadingReport"
-            @click="loadReport(true)"
-          >
-            <el-icon><RefreshRight /></el-icon>
-            强制刷新
-          </button>
-          <button
-            type="button"
-            class="btn-ember inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold"
-            :disabled="scanning"
-            @click="scanNow"
-          >
-            <el-icon><Cpu /></el-icon>
-            手动重扫
-          </button>
-        </div>
+        </template>
       </EmberFilterPanel>
     </EmberPageHeaderCard>
 
@@ -383,29 +385,29 @@ onBeforeUnmount(() => {
     </section>
 
     <div class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-      <section class="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-        <div class="border-b border-gray-100 px-5 py-4 text-sm font-semibold text-gray-900">分辨率分布</div>
-        <el-table :data="report?.resolutionDistribution || []" v-loading="loadingReport" size="small">
-          <el-table-column prop="resolution" label="分辨率" />
-          <el-table-column prop="count" label="数量" width="100" />
-        </el-table>
-      </section>
+      <EmberTableCard :data="report?.resolutionDistribution || []" :loading="loadingReport" size="small">
+        <template #header>
+          <div class="text-sm font-semibold text-gray-900">分辨率分布</div>
+        </template>
+        <el-table-column prop="resolution" label="分辨率" />
+        <el-table-column prop="count" label="数量" width="100" />
+      </EmberTableCard>
 
-      <section class="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-        <div class="border-b border-gray-100 px-5 py-4 text-sm font-semibold text-gray-900">编码分布</div>
-        <el-table :data="report?.codecDistribution || []" v-loading="loadingReport" size="small">
-          <el-table-column prop="codec" label="编码" />
-          <el-table-column prop="count" label="数量" width="100" />
-        </el-table>
-      </section>
+      <EmberTableCard :data="report?.codecDistribution || []" :loading="loadingReport" size="small">
+        <template #header>
+          <div class="text-sm font-semibold text-gray-900">编码分布</div>
+        </template>
+        <el-table-column prop="codec" label="编码" />
+        <el-table-column prop="count" label="数量" width="100" />
+      </EmberTableCard>
 
-      <section class="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-sm">
-        <div class="border-b border-gray-100 px-5 py-4 text-sm font-semibold text-gray-900">HDR 分布</div>
-        <el-table :data="report?.hdrDistribution || []" v-loading="loadingReport" size="small">
-          <el-table-column prop="type" label="类型" />
-          <el-table-column prop="count" label="数量" width="100" />
-        </el-table>
-      </section>
+      <EmberTableCard :data="report?.hdrDistribution || []" :loading="loadingReport" size="small">
+        <template #header>
+          <div class="text-sm font-semibold text-gray-900">HDR 分布</div>
+        </template>
+        <el-table-column prop="type" label="类型" />
+        <el-table-column prop="count" label="数量" width="100" />
+      </EmberTableCard>
     </div>
 
     <EmberTableCard :data="report?.lowQualityItems || []" :loading="loadingReport">
@@ -413,7 +415,6 @@ onBeforeUnmount(() => {
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 class="text-sm font-semibold text-gray-900">低画质清单（汇总）</h2>
-            <p class="mt-1 text-xs text-gray-500">按当前媒体库筛出命中的低画质分组，并支持查看组内明细。</p>
           </div>
           <span
             v-if="report"
@@ -475,14 +476,14 @@ onBeforeUnmount(() => {
       </template>
     </EmberTableCard>
 
-    <el-drawer v-model="detailVisible" size="60%" destroy-on-close append-to-body>
+    <el-drawer v-model="detailVisible" size="min(760px, 100vw)" destroy-on-close append-to-body>
       <template #header>
         <div class="text-lg font-bold text-gray-900">
           低画质明细：{{ detailGroup?.name || '-' }}
         </div>
       </template>
 
-      <el-table :data="detailItems" v-loading="detailLoading" style="width: 100%">
+      <EmberTableCard :data="detailItems" :loading="detailLoading">
         <el-table-column label="封面" width="92">
           <template #default="{ row }">
             <img
@@ -494,24 +495,24 @@ onBeforeUnmount(() => {
             />
           </template>
         </el-table-column>
-        <el-table-column prop="name" label="条目名称" min-width="260" />
+        <el-table-column prop="name" label="条目名称" min-width="220" />
         <el-table-column prop="resolution" label="分辨率" width="110" />
         <el-table-column prop="codec" label="编码" width="120" />
         <el-table-column prop="bitrate" label="码率(kbps)" width="120" />
-      </el-table>
 
-      <div class="mt-4 flex justify-end">
-        <el-pagination
-          :current-page="detailQuery.page"
-          :page-size="detailQuery.pageSize"
-          :total="detailTotal"
-          :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handleDetailPageChange"
-          @size-change="handleDetailPageSizeChange"
-          background
-        />
-      </div>
+        <template #pagination>
+          <el-pagination
+            :current-page="detailQuery.page"
+            :page-size="detailQuery.pageSize"
+            :total="detailTotal"
+            :page-sizes="[20, 50, 100]"
+            layout="total, sizes, prev, pager, next, jumper"
+            @current-change="handleDetailPageChange"
+            @size-change="handleDetailPageSizeChange"
+            background
+          />
+        </template>
+      </EmberTableCard>
     </el-drawer>
   </div>
 </template>

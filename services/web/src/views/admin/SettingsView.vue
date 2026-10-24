@@ -474,7 +474,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="space-y-5 animate-fade-in" v-loading="loading">
+  <div class="space-y-6" v-loading="loading">
     <EmberPageHeaderCard title="设置中心">
       <template #titleSuffix>
         <span class="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-medium text-gray-600">
@@ -610,7 +610,7 @@ onMounted(async () => {
                 type="button"
                 @click="handleSaveGroup(activeGroupSection)"
                 :disabled="savingGroups[activeGroupSection.key] || !groupHasChanges(activeGroupSection)"
-                class="btn-ember rounded-xl px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+                class="btn-ember cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {{ savingGroups[activeGroupSection.key] ? '保存中...' : '保存本组配置' }}
               </button>
@@ -634,7 +634,7 @@ onMounted(async () => {
             <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
-                  <span class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-gray-900 text-white">
+                  <span class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-ember/10 text-ember">
                     <el-icon><Key /></el-icon>
                   </span>
                   <div>
@@ -767,6 +767,7 @@ onMounted(async () => {
                         v-for="option in item.options || []"
                         :key="option.value"
                         type="button"
+                        :aria-pressed="draftValues[item.key] === option.value"
                         class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium leading-5 transition"
                         :class="
                           draftValues[item.key] === option.value
@@ -876,7 +877,7 @@ onMounted(async () => {
       :destroy-on-close="true"
       @closed="handleApiKeyDialogClosed"
     >
-      <div class="space-y-3 p-6 pt-2">
+      <div class="space-y-3">
         <p class="text-sm leading-6 text-gray-600">
           这是唯一一次明文展示，关闭后无法再次查看。
         </p>
@@ -886,7 +887,7 @@ onMounted(async () => {
       </div>
 
       <template #footer>
-        <div class="flex justify-end gap-2 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-2">
           <button
             type="button"
             @click="copyApiKey"

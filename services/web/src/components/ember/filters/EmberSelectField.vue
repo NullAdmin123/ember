@@ -32,15 +32,16 @@ const handleChange = (value: string | number | boolean | null | undefined) => {
 <template>
   <div class="space-y-1.5">
     <label class="text-xs font-semibold tracking-wide text-gray-500">{{ props.label }}</label>
-    <div class="relative w-full">
+    <div class="group relative w-full">
       <div v-if="props.icon" class="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center pl-3">
-        <el-icon class="text-gray-400">
+        <el-icon class="text-gray-400 transition-colors group-focus-within:text-ember">
           <component :is="props.icon" />
         </el-icon>
       </div>
       <el-select
         :model-value="props.modelValue"
         :placeholder="props.placeholder"
+        :aria-label="props.label"
         class="w-full ember-filter-select"
         :class="props.icon ? 'ember-filter-select-with-icon' : ''"
         v-bind="$attrs"

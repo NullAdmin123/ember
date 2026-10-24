@@ -297,6 +297,9 @@ body {
 .ember-filter-date-range.el-date-editor,
 .ember-filter-date-range .el-range-editor.el-input__wrapper,
 .ember-filter-date-range.el-range-editor.el-input__wrapper {
+  width: 100% !important;
+  max-width: 100%;
+  box-sizing: border-box;
   height: var(--ember-field-height) !important;
   min-height: var(--ember-field-height) !important;
   border-radius: var(--ember-field-radius) !important;
@@ -387,6 +390,11 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+
+  .animate-ping {
+    animation: none !important;
+    opacity: 0 !important;
+  }
 }
 
 .ember-range-picker-popper .el-picker-panel {
@@ -419,13 +427,31 @@ body {
   box-shadow: var(--ember-field-shadow-focus) !important;
 }
 
+.ember-form-dialog.el-dialog,
 .ember-form-dialog .el-dialog {
   border-radius: 1rem;
   overflow: hidden;
+  padding: 0;
 }
 
 .ember-form-dialog .el-dialog__header {
   margin-right: 0;
   border-bottom: 1px solid #f3f4f6;
   padding: 20px 24px;
+}
+
+.ember-form-dialog .el-dialog__body {
+  padding: 20px 24px;
+}
+
+.ember-form-dialog .el-dialog__footer {
+  border-top: 1px solid #f3f4f6;
+  padding: 16px 24px 20px;
+}
+
+.el-pagination {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 0.5rem;
+  max-width: 100%;
 }

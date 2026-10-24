@@ -151,8 +151,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="space-y-6 animate-fade-in" v-loading="loading">
-    <EmberPageHeaderCard v-if="!embedded" title="活跃会话" description="查看当前 Emby 播放会话与刷新状态。">
+  <div class="space-y-6" v-loading="loading">
+    <EmberPageHeaderCard :hide-title="embedded" title="活跃会话">
       <template #titleSuffix>
         <span class="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-normal text-gray-500">
           {{ sessionCount }} 个会话
@@ -181,7 +181,7 @@ onUnmounted(() => {
         </div>
       </template>
 
-      <div class="mt-4 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+      <div v-if="lastRefreshedAt || loadError" class="mt-4 flex flex-wrap items-center gap-2 text-xs text-gray-500">
         <span v-if="lastRefreshedAt" class="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-gray-500">
           最近刷新 {{ lastRefreshedAt }}
         </span>
@@ -193,15 +193,6 @@ onUnmounted(() => {
         </span>
       </div>
     </EmberPageHeaderCard>
-
-    <div v-else class="flex flex-wrap items-center justify-end gap-3">
-      <span class="rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-500">{{ sessionCount }} 个会话</span>
-      <div class="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
-        <span class="text-xs font-semibold text-gray-500">自动刷新</span>
-        <el-switch v-model="autoRefresh" aria-label="切换活跃会话自动刷新" />
-      </div>
-      <button type="button" @click="fetchSessions()" :disabled="loading || refreshing" class="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60">刷新</button>
-    </div>
 
     <EmberEmptyStateCard
       v-if="!loading && loadError && sessions.length === 0"

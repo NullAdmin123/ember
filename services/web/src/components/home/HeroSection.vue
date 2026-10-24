@@ -46,7 +46,7 @@ const router = useRouter()
           </button>
           
           <div class="text-sm text-gray-500 font-medium">
-            已有账号？ <router-link to="/login" class="text-ember hover:underline font-bold transition-colors">立即登录</router-link>
+            已有账号？ <router-link to="/login" class="text-ember hover:underline font-bold transition-colors cursor-pointer">立即登录</router-link>
           </div>
         </div>
         

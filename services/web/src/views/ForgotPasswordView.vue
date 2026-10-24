@@ -99,7 +99,7 @@ onBeforeUnmount(() => {
     <div class="absolute bottom-[10%] -left-[10%] w-[40%] h-[40%] bg-gray-50 opacity-60 blur-[80px] rounded-full pointer-events-none"></div>
 
     <div class="w-full max-w-md relative z-10 animate-fade-in">
-      <router-link to="/login" class="inline-flex items-center text-text-secondary hover:text-ember mb-8 transition-colors text-sm group">
+      <router-link to="/login" class="inline-flex items-center text-text-secondary hover:text-ember mb-8 transition-colors text-sm group cursor-pointer">
         <el-icon class="mr-1 transition-transform group-hover:-translate-x-1"><ArrowLeft /></el-icon>
         返回登录
       </router-link>

@@ -35,6 +35,8 @@
   - `services/web/src/views/admin/UserPlaybackProfilesView.vue`
   - `services/web/src/views/admin/PlansView.vue`
   - `services/web/src/views/admin/PlanGroupsView.vue`（用户分组 / 权益模板主入口）
+  - `services/web/src/views/admin/DevicesView.vue`
+  - `services/web/src/views/admin/MediaGapsView.vue`
 - 容器型中心页：
   - `services/web/src/views/admin/UserCenterView.vue`
   - `services/web/src/views/admin/PaymentCenterView.vue`
@@ -44,14 +46,15 @@
   - `services/web/src/views/admin/MediaQualityView.vue`
   - `services/web/src/views/admin/P115AccountsView.vue`
 
-当前已接入这套基础组件的控制台页面包括：
+当前已接入这套基础组件的控制台页面与区块包括：
 
+- `services/web/src/views/console/AccountCenterView.vue`（含嵌入的 `services/web/src/components/account/P115AccountSection.vue`）
+- `services/web/src/views/console/ProfileAnalyticsView.vue`
 - `services/web/src/views/console/SubscriptionsView.vue`
 - `services/web/src/views/console/NewSubscriptionView.vue`
 - `services/web/src/views/console/RenewalCenterView.vue`
 - `services/web/src/views/console/DashboardView.vue`
 - `services/web/src/views/console/RankingsView.vue`
-- `services/web/src/views/console/P115AccountView.vue`
 
 边界约束：
 
@@ -92,7 +95,7 @@
 ### 2.4 设计系统
 
 - **CSS 类**：`panel-clean`（卡片）, `input-ember`（输入框）, `btn-ember`（按钮）
-- **颜色**：ember 色系（橙红 `#ea580c`）
+- **颜色**：ember 色系（品牌红 `#E50914`）
 - **布局**：Tailwind 响应式 grid + Element Plus 组件
 - **图标**：`@element-plus/icons-vue`
 - **构建元信息**：`utils/buildInfo.ts` 统一消费 `VITE_GIT_COMMIT_SHA`、`VITE_GITHUB_REPOSITORY`、`VITE_GITHUB_REPOSITORY_URL`，缺失 hash 时降级展示 `dev`
@@ -223,8 +226,8 @@
 
 ### 3.5.2 用户端 115 网盘
 
-- 路由：`/console/p115`（仅 `role=user`；管理员侧边栏不展示且路由守卫不继承）
-- 视图：`views/console/P115AccountView.vue`
+- 主入口：账号中心 `/console/account` 的「115 播放账号」分段；旧路径 `/console/p115` 路由级重定向至 `/console/account`（仅 `role=user`）
+- 视图与组件：`views/console/AccountCenterView.vue` + `components/account/P115AccountSection.vue`（嵌入态隐藏重复页头标题，仅在已绑定账号时保留状态徽章）
 - 页面职责：
   - 按“绑定 Cookie → 验证 Cookie → 配置已有目录/最大路数 → 启用”渐进披露当前用户唯一个人 playback
   - Cookie 只存在于密码输入框，创建/替换成功后立即销毁，不回显 Provider User-Agent、owner 或内部目录 ID

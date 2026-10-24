@@ -583,7 +583,6 @@ async function saveRanks() {
     <EmberPageHeaderCard
       :hide-title="props.embedded"
       title="用户分组 / 权益模板"
-      description="用户分组、媒体库模板和 Emby 权益模板统一在这里维护。"
     >
       <template #titleSuffix>
         <span class="rounded-full bg-gray-100 px-2 py-1 text-xs font-normal text-gray-500">{{ groups.length }} 个分组</span>
@@ -660,7 +659,7 @@ async function saveRanks() {
             v-if="canRetryActiveSyncBatch"
             @click="handleRetryFailedSyncBatch"
             :disabled="retryingSyncBatch"
-            class="btn-ember inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm hover:shadow-md disabled:opacity-70"
+            class="btn-ember inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm hover:shadow-md disabled:opacity-70"
           >
             <el-icon><Refresh /></el-icon>
             <span>{{ retryingSyncBatch ? '重试中...' : '重试失败项' }}</span>
@@ -697,7 +696,6 @@ async function saveRanks() {
       <template #header>
         <div class="flex items-center justify-between">
           <h2 class="text-base font-semibold text-gray-900">分组列表</h2>
-          <span class="text-sm text-gray-500">权益模板随分组生效</span>
         </div>
       </template>
 
@@ -825,7 +823,7 @@ async function saveRanks() {
       title="新建用户分组"
       width="680px"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form label-position="top" class="space-y-4">
           <el-form-item label="分组标识">
             <el-input v-model="createForm.key" placeholder="例如：VIP_A" class="input-ember" />
@@ -903,7 +901,7 @@ async function saveRanks() {
         </el-form>
       </div>
       <template #footer>
-        <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-3">
           <button
             @click="dialogVisible = false"
             class="rounded-xl px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 cursor-pointer"
@@ -926,7 +924,7 @@ async function saveRanks() {
       title="编辑用户分组"
       width="680px"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form label-position="top" class="space-y-4">
           <el-form-item label="分组标识">
             <el-input :model-value="editForm.key" disabled class="input-ember" />
@@ -1003,7 +1001,7 @@ async function saveRanks() {
         </el-form>
       </div>
       <template #footer>
-        <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-3">
           <button
             @click="editDialogVisible = false"
             class="rounded-xl px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 cursor-pointer"
@@ -1026,7 +1024,7 @@ async function saveRanks() {
       title="媒体库模板"
       width="680px"
     >
-      <div class="p-6 pt-2">
+      <div>
         <div v-loading="loadingTemplate" class="space-y-4">
           <div class="flex items-center justify-between rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
             <div>
@@ -1060,7 +1058,7 @@ async function saveRanks() {
         </div>
       </div>
       <template #footer>
-        <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-3">
           <button
             @click="mediaDialogVisible = false"
             class="rounded-xl px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 cursor-pointer"
@@ -1090,7 +1088,7 @@ async function saveRanks() {
       title="Emby 权益模板"
       width="680px"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form v-loading="loadingTemplate" label-position="top" class="space-y-4">
           <div class="rounded-2xl border border-gray-100 bg-gray-50 px-4 py-3">
             <div class="text-sm font-semibold text-gray-900">{{ selectedGroup?.name || '-' }}</div>
@@ -1139,7 +1137,7 @@ async function saveRanks() {
         </el-form>
       </div>
       <template #footer>
-        <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+        <div class="flex justify-end gap-3">
           <button
             @click="policyDialogVisible = false"
             class="rounded-xl px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 cursor-pointer"
@@ -1158,7 +1156,7 @@ async function saveRanks() {
     </EmberFormDialog>
   </div>
   <EmberFormDialog v-model="rankDialog" title="配置权益等级" width="520px">
-    <div class="p-6 pt-2">
+    <div>
       <p class="mb-4 text-sm text-gray-500">等级越高越优先生效；高等级须包含低等级的全部媒体库。</p>
       <el-form label-position="top" class="grid grid-cols-1 gap-x-6 sm:grid-cols-2">
         <el-form-item v-for="group in groups" :key="group.key" :label="group.name">
@@ -1167,7 +1165,7 @@ async function saveRanks() {
       </el-form>
     </div>
     <template #footer>
-      <div class="flex justify-end gap-3 px-6 pb-6 pt-0">
+      <div class="flex justify-end gap-3">
         <button
           type="button"
           :disabled="rankSaving"

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { planEntitlementText, validateSinglePlan } from '@/utils/entitlements'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Delete, Refresh, EditPen, Goods } from '@element-plus/icons-vue'
+import { Plus, Delete, Refresh, EditPen, Goods, Search } from '@element-plus/icons-vue'
 import { createPlan, deletePlan, getPlanGroups, getPlans, updatePlan } from '@/api/admin'
 import EmberTableCard from '@/components/ember/data-display/EmberTableCard.vue'
 import EmberSelectField from '@/components/ember/filters/EmberSelectField.vue'
@@ -321,6 +321,13 @@ onMounted(async () => {
           >
             重置
           </button>
+          <button
+            @click="handleFilterChange"
+            class="btn-ember inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm hover:shadow-md active:scale-[0.99]"
+          >
+            <el-icon><Search /></el-icon>
+            查询
+          </button>
         </template>
       </EmberFilterPanel>
     </EmberPageHeaderCard>
@@ -411,7 +418,7 @@ onMounted(async () => {
       title="新建付费方案"
       width="520px"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form label-position="top" class="space-y-4">
           <el-form-item label="方案名称">
             <el-input v-model="form.name" placeholder="例如：月度会员" class="input-ember" />
@@ -421,23 +428,22 @@ onMounted(async () => {
             <el-input v-model="form.description" type="textarea" :rows="3" placeholder="可选，展示在购买卡片" class="input-ember" />
           </el-form-item>
 
-          <div class="grid grid-cols-2 gap-6">
-
+          <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <el-form-item label="价格">
-              <el-input-number v-model="form.priceDisplay" :min="0.01" :step="0.01" :precision="2" class="w-full !w-full form-number" />
+              <el-input-number v-model="form.priceDisplay" :min="0.01" :step="0.01" :precision="2" class="w-full form-number" />
+            </el-form-item>
+
+            <el-form-item label="币种">
+              <el-select v-model="form.currency" class="w-full form-select" placeholder="选择币种">
+                <el-option
+                  v-for="option in currencyOptions"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
             </el-form-item>
           </div>
-
-          <el-form-item label="币种">
-            <el-select v-model="form.currency" class="w-full form-select" placeholder="选择币种">
-              <el-option
-                v-for="option in currencyOptions"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value"
-              />
-            </el-select>
-          </el-form-item>
 
           <el-form-item label="权益分组">
             <el-select v-model="form.planGroup" class="w-full form-select" placeholder="选择分组">
@@ -460,7 +466,7 @@ onMounted(async () => {
         </el-form>
       </div>
       <template #footer>
-        <div class="px-6 pb-6 pt-0 flex justify-end gap-3">
+        <div class="flex justify-end gap-3">
           <button
             @click="dialogVisible = false"
             class="cursor-pointer rounded-xl px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
@@ -483,7 +489,7 @@ onMounted(async () => {
       title="编辑付费方案"
       width="520px"
     >
-      <div class="p-6 pt-2">
+      <div>
         <el-form label-position="top" class="space-y-4">
           <el-form-item label="方案名称">
             <el-input v-model="editForm.name" placeholder="例如：月度会员" class="input-ember" />
@@ -493,23 +499,22 @@ onMounted(async () => {
             <el-input v-model="editForm.description" type="textarea" :rows="3" placeholder="可选，展示在购买卡片" class="input-ember" />
           </el-form-item>
 
-          <div class="grid grid-cols-2 gap-6">
-
+          <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <el-form-item label="价格">
-              <el-input-number v-model="editForm.priceDisplay" :min="0.01" :step="0.01" :precision="2" class="w-full !w-full form-number" />
+              <el-input-number v-model="editForm.priceDisplay" :min="0.01" :step="0.01" :precision="2" class="w-full form-number" />
+            </el-form-item>
+
+            <el-form-item label="币种">
+              <el-select v-model="editForm.currency" class="w-full form-select" placeholder="选择币种">
+                <el-option
+                  v-for="option in currencyOptions"
+                  :key="option.value"
+                  :label="option.label"
+                  :value="option.value"
+                />
+              </el-select>
             </el-form-item>
           </div>
-
-          <el-form-item label="币种">
-            <el-select v-model="editForm.currency" class="w-full form-select" placeholder="选择币种">
-              <el-option
-                v-for="option in currencyOptions"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value"
-              />
-            </el-select>
-          </el-form-item>
 
           <el-form-item label="权益分组">
             <el-select v-model="editForm.planGroup" class="w-full form-select" placeholder="选择分组">
@@ -541,7 +546,7 @@ onMounted(async () => {
         </el-form>
       </div>
       <template #footer>
-        <div class="px-6 pb-6 pt-0 flex justify-end gap-3">
+        <div class="flex justify-end gap-3">
           <button
             @click="editDialogVisible = false"
             class="cursor-pointer rounded-xl px-4 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"

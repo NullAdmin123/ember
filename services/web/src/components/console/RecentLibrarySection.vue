@@ -139,9 +139,10 @@ function scrollByDirection(direction: 'left' | 'right') {
   if (!scrollerRef.value) return
 
   const offset = Math.max(scrollerRef.value.clientWidth * 0.85, 320)
+  const reduceMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
   scrollerRef.value.scrollBy({
     left: direction === 'left' ? -offset : offset,
-    behavior: 'smooth'
+    behavior: reduceMotion ? 'auto' : 'smooth'
   })
 }
 

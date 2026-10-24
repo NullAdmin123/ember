@@ -225,7 +225,6 @@ watch(
   <PlaybackProfileContent
     v-model:customDateRange="customDateRange"
     :title="profileTitle"
-    description="从播放历史里提炼活跃时段、设备偏好和画像标签"
     :profile="profile"
     :loading="loading"
     :range-options="rangeOptions"
